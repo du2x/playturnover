@@ -1,0 +1,591 @@
+import { Room } from "../colyseus-compat.js";
+import type { Client } from "colyseus";
+import {
+  ELEVATOR_ARRIVE_MS,
+  ELEVATOR_RIDE_MS,
+  HALLWAY_MAX_X,
+  HALLWAY_MIN_X,
+  LOBBY_CENTER,
+  MAX_PLAYERS,
+  ROOM_CODE_LENGTH,
+  ROOM_COUNT,
+  SERVER_MAX_SPEED_PX_S,
+  SERVER_PATCH_RATE_MS,
+  SHIFT_LENGTH_S,
+} from "@grandhotel/shared";
+import {
+  ElevatorCar,
+  PlayerState,
+  RoomData,
+  RoomState,
+} from "@grandhotel/shared";
+import {
+  AdvancePhaseMsgSchema,
+  CallElevatorMsgSchema,
+  ChannelCancelMsgSchema,
+  ChannelStartMsgSchema,
+  MoveMsgSchema,
+  RideElevatorMsgSchema,
+  StartRoundMsgSchema,
+} from "@grandhotel/shared";
+import { getAllRoomIds, getRoomRect, getElevatorX } from "@grandhotel/shared";
+import { isInsideRoom } from "@grandhotel/shared";
+import {
+  callElevator,
+  completeRide,
+  createElevatorState,
+  removeRiderFromCar,
+  resetElevatorState,
+  startNextCycle,
+  tickArrival,
+  tryRideElevator,
+} from "../elevator.js";
+import type { ElevatorCarState } from "../elevator.js";
+import { canStartChannel, applyChannelCompletion } from "../channels.js";
+import type { Channel } from "../channels.js";
+
+// ── movement helpers ────────────────────────────────────────────────────────
+
+export function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+/**
+ * Server-side clamp: newX = lastX + clamp(dx, ±SERVER_MAX_SPEED_PX_S*dt)
+ * then hard-clamped to hallway bounds. Pure, exported for unit tests.
+ */
+export function computeClampedX(
+  currentX: number,
+  dx: number,
+  dtSec: number,
+): number {
+  const maxDelta = SERVER_MAX_SPEED_PX_S * Math.max(0, dtSec);
+  const clampedDx = clamp(dx, -maxDelta, maxDelta);
+  const newX = currentX + clampedDx;
+  return clamp(newX, HALLWAY_MIN_X, HALLWAY_MAX_X);
+}
+
+// ── room ────────────────────────────────────────────────────────────────────
+
+export class HotelRoom extends Room<RoomState> {
+  declare state: RoomState;
+  declare maxClients: number;
+  declare hasReachedMaxClients: () => boolean;
+  declare setPatchRate: (ms: number) => void;
+  declare setState: (state: RoomState) => void;
+  declare onMessage: (type: string, cb: (client: Client, data: unknown) => void) => void;
+  private lastMoveAt = new Map<string, number>();
+  private clientMap = new Map<string, Client>();
+  private saboteurSessionId: string | null = null;
+  private roleMap = new Map<string, "staff" | "saboteur">();
+  private shiftLengthS: number = SHIFT_LENGTH_S;
+  private elevatorRuntime = new WeakMap<ElevatorCar, ElevatorCarState>();
+  private elevatorArriveTimeout = new Map<string, unknown>();
+  private elevatorRideTimeout = new Map<string, unknown>();
+  private activeChannels = new Map<string, Channel>();
+  private channelTimeouts = new Map<string, unknown>();
+
+  onCreate(options: unknown): void {
+    const opts = options as Record<string, unknown> | null | undefined;
+    const override = opts?.["shiftLengthSOverride"];
+    if (typeof override === "number" && Number.isFinite(override) && override > 0) {
+      this.shiftLengthS = override;
+    } else if (
+      typeof opts?.["shiftLengthS"] === "number" &&
+      Number.isFinite(opts?.["shiftLengthS"]) &&
+      (opts?.["shiftLengthS"] as number) > 0
+    ) {
+      this.shiftLengthS = opts?.["shiftLengthS"] as number;
+    } else {
+      this.shiftLengthS = SHIFT_LENGTH_S;
+    }
+
+    this.maxClients = MAX_PLAYERS;
+    this.setPatchRate(SERVER_PATCH_RATE_MS);
+    this.setState(new RoomState());
+    this.state.phase = "waiting";
+    // ensure resultsPayload stays null per R-7
+    this.state.resultsPayload = null;
+    this.state.hostSessionId = "";
+    this.state.shiftEndsAt = 0;
+    this.state.winner = null;
+    this.state.traitorReveal = null;
+    this.state.coverage = 0;
+
+    // building topology — ROOM_COUNT rooms via shared getRoomRect
+    const ids = getAllRoomIds();
+    // assert single source of truth for room count
+    void ROOM_COUNT;
+    for (const id of ids) {
+      const rect = getRoomRect(id);
+      const rd = new RoomData();
+      rd.id = id;
+      rd.floor = rect.floor;
+      rd.xMin = rect.xMin;
+      rd.xMax = rect.xMax;
+      rd.state = "clean";
+      this.state.rooms.set(id, rd);
+    }
+
+    // elevators idle at floor 0 stub for M1.3.1
+    const elevatorA = new ElevatorCar();
+    elevatorA.shaft = "A";
+    elevatorA.floor = 0;
+    elevatorA.state = "idle";
+    this.state.elevators.set("A", elevatorA);
+    const elevatorB = new ElevatorCar();
+    elevatorB.shaft = "B";
+    elevatorB.floor = 0;
+    elevatorB.state = "idle";
+    this.state.elevators.set("B", elevatorB);
+    this.elevatorRuntime.set(elevatorA, createElevatorState("A"));
+    this.elevatorRuntime.set(elevatorB, createElevatorState("B"));
+
+    // drive the Colyseus clock so clock.setTimeout/interval fire deterministically
+    this.setSimulationInterval(() => {}, 50);
+
+    this.onMessage("move", (client: Client, data: unknown) => {
+      this.handleMove(client, data);
+    });
+
+    this.onMessage("advancePhase", (client: Client, data: unknown) => {
+      this.handleAdvancePhase(client, data);
+    });
+
+    this.onMessage("startRound", (client: Client, data: unknown) => {
+      this.handleStartRound(client, data);
+    });
+
+    this.onMessage("callElevator", (client: Client, data: unknown) => {
+      this.handleCallElevator(client, data);
+    });
+
+    this.onMessage("rideElevator", (client: Client, data: unknown) => {
+      this.handleRideElevator(client, data);
+    });
+
+    this.onMessage("channelStart", (client: Client, data: unknown) => {
+      this.handleChannelStart(client, data);
+    });
+
+    this.onMessage("channelCancel", (client: Client, data: unknown) => {
+      this.handleChannelCancel(client, data);
+    });
+  }
+
+  async onJoin(client: Client, options?: unknown): Promise<void> {
+    const opts = options as Record<string, unknown> | undefined;
+    const rawName = opts?.["name"];
+
+    if (
+      typeof rawName !== "string" ||
+      rawName.trim().length === 0 ||
+      rawName.trim().length > 24
+    ) {
+      throw new Error("bad-name");
+    }
+
+    if (this.state.players.size >= MAX_PLAYERS) {
+      throw new Error("full");
+    }
+
+    const name = rawName.trim();
+    const colorIndex = this.state.players.size;
+    const x = LOBBY_CENTER.x;
+
+    const player = new PlayerState();
+    player.sessionId = client.sessionId;
+    player.name = name;
+    player.colorIndex = colorIndex;
+    player.x = x;
+    player.floor = 0;
+
+    this.state.players.set(client.sessionId, player);
+
+    if (!this.state.hostSessionId) {
+      this.state.hostSessionId = client.sessionId;
+    }
+
+    this.clientMap.set(client.sessionId, client);
+    this.lastMoveAt.set(client.sessionId, Date.now());
+  }
+
+  async onLeave(client: Client, _consented?: boolean): Promise<void> {
+    this.state.players.delete(client.sessionId);
+    this.lastMoveAt.delete(client.sessionId);
+    this.clientMap.delete(client.sessionId);
+    this.roleMap.delete(client.sessionId);
+    if (this.saboteurSessionId === client.sessionId) {
+      this.saboteurSessionId = null;
+    }
+
+    for (const car of this.state.elevators.values()) {
+      const runtime = this.elevatorRuntime.get(car);
+      if (runtime) {
+        removeRiderFromCar(runtime, client.sessionId);
+      }
+    }
+
+    if (this.state.hostSessionId === client.sessionId) {
+      const remaining = [...this.state.players.keys()];
+      this.state.hostSessionId = remaining[0] ?? "";
+      if (this.state.players.size === 0) {
+        this.state.hostSessionId = "";
+      }
+    }
+  }
+
+  private handleMove(client: Client, raw: unknown): void {
+    const parsed = MoveMsgSchema.safeParse(raw);
+    if (!parsed.success) return;
+    const player = this.state.players.get(client.sessionId);
+    if (!player) return;
+
+    const now = Date.now();
+    const last = this.lastMoveAt.get(client.sessionId) ?? now;
+    const dt = Math.max(0, (now - last) / 1000);
+
+    // ignore dy entirely
+    const newX = computeClampedX(player.x, parsed.data.dx, dt);
+    player.x = newX;
+    this.lastMoveAt.set(client.sessionId, now);
+
+    // walk-out cancels any active channel (R-9)
+    this.checkChannelBounds(client.sessionId);
+  }
+
+  private checkChannelBounds(sessionId: string): void {
+    const player = this.state.players.get(sessionId);
+    const channel = this.activeChannels.get(sessionId);
+    if (!player || !channel) return;
+    if (!isInsideRoom(player.x, player.floor, channel.roomId)) {
+      this.cancelChannel(sessionId);
+    }
+  }
+
+  private handleAdvancePhase(client: Client, raw: unknown): void {
+    if (client.sessionId !== this.state.hostSessionId) return;
+    const parsed = AdvancePhaseMsgSchema.safeParse(raw ?? {});
+    if (!parsed.success) return;
+
+    if (this.state.phase === "waiting") {
+      this.state.phase = "playing";
+    } else if (this.state.phase === "playing") {
+      this.state.phase = "results";
+      this.state.resultsPayload = null;
+    }
+    // results → no further transitions
+  }
+
+  private handleStartRound(client: Client, raw: unknown): void {
+    if (client.sessionId !== this.state.hostSessionId) return;
+    const parsed = StartRoundMsgSchema.safeParse(raw ?? {});
+    if (!parsed.success) return;
+
+    if (this.state.phase !== "waiting") return;
+
+    if (this.state.players.size < 4) {
+      const anyClient = client as unknown as { send?: (t: string, d: unknown) => void };
+      if (typeof anyClient.send === "function") {
+        anyClient.send("error", { reason: "need-4-players" });
+      }
+      return;
+    }
+
+    // success: transition to playing, set shift timer, spawn at lobby, assign roles
+    this.state.phase = "playing";
+    this.state.shiftEndsAt = Date.now() + this.shiftLengthS * 1000;
+
+    // lobby gather spawn — all players at lobby center floor 0
+    for (const p of this.state.players.values()) {
+      p.x = LOBBY_CENTER.x;
+      p.floor = 0;
+    }
+
+    // secret role assignment — uniformly pick one saboteur
+    const ids = [...this.state.players.keys()];
+    const idx = Math.floor(Math.random() * ids.length);
+    const saboteurId = ids[idx] ?? ids[0] ?? null;
+    this.saboteurSessionId = saboteurId;
+    this.roleMap.clear();
+    for (const sid of ids) {
+      const role: "staff" | "saboteur" = sid === saboteurId ? "saboteur" : "staff";
+      this.roleMap.set(sid, role);
+      const c = this.clientMap.get(sid);
+      const anyC = c as unknown as { send?: (t: string, d: unknown) => void } | undefined;
+      if (c && anyC && typeof anyC.send === "function") {
+        anyC.send("role", { role });
+      }
+    }
+    // reveal stays null until results — never write role into broadcast map
+  }
+
+  // ── elevator helpers ───────────────────────────────────────────────────────
+
+  private getElevator(shaft: string): { car: ElevatorCar; runtime: ElevatorCarState } | null {
+    const car = this.state.elevators.get(shaft);
+    if (!car) return null;
+    const runtime = this.elevatorRuntime.get(car);
+    if (!runtime) return null;
+    return { car, runtime };
+  }
+
+  private syncElevatorCar(car: ElevatorCar, runtime: ElevatorCarState): void {
+    car.floor = runtime.floor;
+    car.state = runtime.state;
+    car.queue.splice(0, car.queue.length);
+    for (const id of runtime.queue) {
+      car.queue.push(id);
+    }
+  }
+
+  private scheduleElevatorArrival(shaft: string): void {
+    this.clearElevatorArriveTimeout(shaft);
+    this.elevatorArriveTimeout.set(
+      shaft,
+      this.clock.setTimeout(() => this.handleElevatorArrived(shaft), ELEVATOR_ARRIVE_MS),
+    );
+  }
+
+  private scheduleElevatorRide(shaft: string): void {
+    this.clearElevatorRideTimeout(shaft);
+    this.elevatorRideTimeout.set(
+      shaft,
+      this.clock.setTimeout(() => this.handleElevatorRode(shaft), ELEVATOR_RIDE_MS),
+    );
+  }
+
+  private clearElevatorArriveTimeout(shaft: string): void {
+    const t = this.elevatorArriveTimeout.get(shaft);
+    if (t !== undefined && t !== null) {
+      // Clock returns a Delayed instance; we can clear via the clock or cast to Delayed.
+      const delayed = t as unknown as { clear?: () => void };
+      if (typeof delayed.clear === "function") delayed.clear();
+      this.elevatorArriveTimeout.delete(shaft);
+    }
+  }
+
+  private clearElevatorRideTimeout(shaft: string): void {
+    const t = this.elevatorRideTimeout.get(shaft);
+    if (t !== undefined && t !== null) {
+      const delayed = t as unknown as { clear?: () => void };
+      if (typeof delayed.clear === "function") delayed.clear();
+      this.elevatorRideTimeout.delete(shaft);
+    }
+  }
+
+  private handleCallElevator(client: Client, raw: unknown): void {
+    const parsed = CallElevatorMsgSchema.safeParse(raw ?? {});
+    if (!parsed.success) return;
+    const player = this.state.players.get(client.sessionId);
+    if (!player) return;
+    const elevator = this.getElevator(parsed.data.shaft);
+    if (!elevator) return;
+    const { car, runtime } = elevator;
+    const now = Date.now();
+
+    const wasIdle = runtime.state === "idle";
+    callElevator(runtime, client.sessionId, player.floor, now);
+    this.syncElevatorCar(car, runtime);
+
+    if (wasIdle && runtime.state === "arriving") {
+      this.scheduleElevatorArrival(parsed.data.shaft);
+    }
+  }
+
+  private handleRideElevator(client: Client, raw: unknown): void {
+    const parsed = RideElevatorMsgSchema.safeParse(raw ?? {});
+    if (!parsed.success) return;
+    const player = this.state.players.get(client.sessionId);
+    if (!player) return;
+    const elevator = this.getElevator(parsed.data.shaft);
+    if (!elevator) return;
+    const { car, runtime } = elevator;
+    const result = tryRideElevator(
+      runtime,
+      client.sessionId,
+      player.x,
+      player.floor,
+      parsed.data.destFloor,
+    );
+    if (!result.ok) {
+      const anyClient = client as unknown as { send?: (t: string, d: unknown) => void };
+      if (typeof anyClient.send === "function") {
+        anyClient.send("error", { reason: result.reason });
+      }
+      return;
+    }
+    this.syncElevatorCar(car, runtime);
+    if (result.seated) {
+      // floor change via elevator cancels any active channel (R-9)
+      this.cancelChannel(client.sessionId);
+    }
+  }
+
+  private handleElevatorArrived(shaft: string): void {
+    const elevator = this.getElevator(shaft);
+    if (!elevator) return;
+    const { car, runtime } = elevator;
+    if (tickArrival(runtime, Date.now())) {
+      this.syncElevatorCar(car, runtime);
+      this.scheduleElevatorRide(shaft);
+    }
+    this.elevatorArriveTimeout.delete(shaft);
+  }
+
+  private handleElevatorRode(shaft: string): void {
+    const elevator = this.getElevator(shaft);
+    if (!elevator) return;
+    const { car, runtime } = elevator;
+    if (runtime.state !== "boarding") {
+      this.elevatorRideTimeout.delete(shaft);
+      return;
+    }
+
+    const { riders, destFloor } = completeRide(runtime);
+    if (destFloor !== null) {
+      const elevatorX = getElevatorX(car.shaft);
+      for (const sessionId of riders) {
+        const p = this.state.players.get(sessionId);
+        if (p) {
+          p.floor = destFloor;
+          p.x = elevatorX;
+          // floor change via elevator cancels any active channel (R-9)
+          this.cancelChannel(sessionId);
+        }
+      }
+    }
+
+    this.syncElevatorCar(car, runtime);
+    this.elevatorRideTimeout.delete(shaft);
+
+    if (runtime.queue.length > 0) {
+      this.dequeueNextBatch(shaft);
+    } else {
+      resetElevatorState(runtime);
+      this.syncElevatorCar(car, runtime);
+    }
+  }
+
+  private dequeueNextBatch(shaft: string): void {
+    const elevator = this.getElevator(shaft);
+    if (!elevator) return;
+    const { car, runtime } = elevator;
+    startNextCycle(runtime, Date.now());
+    this.syncElevatorCar(car, runtime);
+    this.scheduleElevatorArrival(shaft);
+  }
+
+  // ── channel helpers ────────────────────────────────────────────────────────
+
+  private handleChannelStart(client: Client, raw: unknown): void {
+    const parsed = ChannelStartMsgSchema.safeParse(raw ?? {});
+    if (!parsed.success) return;
+    const player = this.state.players.get(client.sessionId);
+    if (!player) return;
+    const room = this.state.rooms.get(parsed.data.roomId);
+    if (!room) return;
+
+    const isInside = isInsideRoom(player.x, player.floor, parsed.data.roomId);
+    const isSaboteur = this.getRoleFor(client.sessionId) === "saboteur";
+    const alreadyChanneling = this.activeChannels.has(client.sessionId);
+
+    const result = canStartChannel(
+      parsed.data.type,
+      parsed.data.roomId,
+      client.sessionId,
+      isInside,
+      this.state.phase,
+      room.state,
+      isSaboteur,
+      alreadyChanneling,
+    );
+
+    if (!result.ok) {
+      const anyClient = client as unknown as { send?: (t: string, d: unknown) => void };
+      if (typeof anyClient.send === "function") {
+        anyClient.send("error", { reason: result.reason });
+      }
+      return;
+    }
+
+    this.startChannel(client.sessionId, result.channel);
+  }
+
+  private startChannel(sessionId: string, channel: Channel): void {
+    this.clearChannelTimeout(sessionId);
+    const player = this.state.players.get(sessionId);
+    if (player) {
+      player.activeChannel = channel.type;
+    }
+    this.activeChannels.set(sessionId, channel);
+    const delay = Math.max(0, channel.endsAt - Date.now());
+    this.channelTimeouts.set(
+      sessionId,
+      this.clock.setTimeout(() => this.completeChannel(sessionId), delay),
+    );
+  }
+
+  private handleChannelCancel(client: Client, raw: unknown): void {
+    const parsed = ChannelCancelMsgSchema.safeParse(raw ?? {});
+    if (!parsed.success) return;
+    this.cancelChannel(client.sessionId);
+  }
+
+  private cancelChannel(sessionId: string): void {
+    const channel = this.activeChannels.get(sessionId);
+    if (!channel) return;
+    this.clearChannelTimeout(sessionId);
+    this.activeChannels.delete(sessionId);
+    const player = this.state.players.get(sessionId);
+    if (player) {
+      player.activeChannel = null;
+    }
+  }
+
+  private completeChannel(sessionId: string): void {
+    this.channelTimeouts.delete(sessionId);
+    const channel = this.activeChannels.get(sessionId);
+    if (!channel) return;
+    const player = this.state.players.get(sessionId);
+    const room = this.state.rooms.get(channel.roomId);
+    if (!player || !room) {
+      this.activeChannels.delete(sessionId);
+      if (player) player.activeChannel = null;
+      return;
+    }
+
+    // re-validate: still inside the same room and same floor; channel still active
+    if (!isInsideRoom(player.x, player.floor, channel.roomId)) {
+      this.activeChannels.delete(sessionId);
+      player.activeChannel = null;
+      return;
+    }
+
+    room.state = applyChannelCompletion(channel.type, room.state);
+    this.activeChannels.delete(sessionId);
+    player.activeChannel = null;
+  }
+
+  private clearChannelTimeout(sessionId: string): void {
+    const t = this.channelTimeouts.get(sessionId);
+    if (t !== undefined && t !== null) {
+      const delayed = t as unknown as { clear?: () => void };
+      if (typeof delayed.clear === "function") delayed.clear();
+      this.channelTimeouts.delete(sessionId);
+    }
+  }
+
+  /** Exposed for server unit tests — not part of public API */
+  public getSaboteurSessionId(): string | null {
+    return this.saboteurSessionId;
+  }
+
+  public getRoleFor(sessionId: string): "staff" | "saboteur" | null {
+    return this.roleMap.get(sessionId) ?? null;
+  }
+
+  public getActiveChannel(sessionId: string): Readonly<Channel> | null {
+    return this.activeChannels.get(sessionId) ?? null;
+  }
+}
