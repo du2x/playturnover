@@ -387,3 +387,177 @@ export function getRoomState(c: HarnessClient, roomId: string): RoomData | null 
   const obj = state.rooms as unknown as Record<string, RoomData>;
   return obj[roomId] ?? null;
 }
+
+// ── M1 integration suites helpers ────────────────────────────────────────────
+
+export type RoomSnapshot = {
+  id: string;
+  floor: number;
+  xMin: number;
+  xMax: number;
+  state: string;
+};
+
+/** All rooms as observed in a client's replicated state. */
+export function getRooms(c: HarnessClient): RoomSnapshot[] {
+  if (!c.room) return [];
+  const state = (c.room as unknown as { state: { rooms: unknown } }).state;
+  const out: RoomSnapshot[] = [];
+  const raw = state.rooms as unknown as {
+    forEach?: (cb: (rd: RoomData, id: string) => void) => void;
+  };
+  if (raw && typeof raw.forEach === "function") {
+    raw.forEach((rd, id) => {
+      out.push({ id, floor: rd.floor, xMin: rd.xMin, xMax: rd.xMax, state: rd.state });
+    });
+  } else if (typeof state.rooms === "object" && state.rooms !== null) {
+    for (const [id, rd] of Object.entries(state.rooms as Record<string, RoomData>)) {
+      out.push({ id, floor: rd.floor, xMin: rd.xMin, xMax: rd.xMax, state: rd.state });
+    }
+  }
+  return out;
+}
+
+export type PlayerSnapshot = {
+  sessionId: string;
+  name: string;
+  colorIndex: number;
+  x: number;
+  floor: number;
+};
+
+/** A single player as observed in a client's replicated state. */
+export function getPlayerState(c: HarnessClient, sessionId: string): PlayerSnapshot | null {
+  if (!c.room) return null;
+  const state = (c.room as unknown as { state: { players: Map<string, PlayerSnapshot> } }).state;
+  const raw = state.players as unknown as Map<string, PlayerSnapshot>;
+  if (raw && typeof raw.get === "function") {
+    const p = raw.get(sessionId);
+    return p ?? null;
+  }
+  const obj = state.players as unknown as Record<string, PlayerSnapshot>;
+  return obj[sessionId] ?? null;
+}
+
+export type ElevatorSnapshot = {
+  shaft: string;
+  floor: number;
+  state: "idle" | "arriving" | "boarding";
+  queue: string[];
+};
+
+/** An elevator car as observed in a client's replicated state. */
+export function getElevatorCar(c: HarnessClient, shaft: string): ElevatorSnapshot | null {
+  if (!c.room) return null;
+  const state = (c.room as unknown as { state: { elevators: Map<string, unknown> } }).state;
+  const raw = state.elevators as unknown as Map<string, unknown>;
+  let car: unknown = null;
+  if (raw && typeof raw.get === "function") {
+    car = raw.get(shaft) ?? null;
+  } else {
+    const obj = state.elevators as unknown as Record<string, unknown>;
+    car = obj[shaft] ?? null;
+  }
+  if (!car || typeof car !== "object") return null;
+  const cObj = car as { shaft?: string; floor?: number; state?: string; queue?: unknown };
+  const queue: string[] = [];
+  const q = cObj.queue;
+  if (Array.isArray(q)) {
+    queue.push(...(q as string[]));
+  } else if (q && typeof (q as { forEach?: unknown }).forEach === "function") {
+    (q as { forEach: (cb: (v: string) => void) => void }).forEach((v) => queue.push(v));
+  }
+  const st = cObj.state;
+  return {
+    shaft: cObj.shaft ?? shaft,
+    floor: cObj.floor ?? 0,
+    state: st === "boarding" || st === "arriving" ? st : "idle",
+    queue,
+  };
+}
+
+/**
+ * Moves a client's avatar horizontally toward targetX by streaming move
+ * messages; returns once the replicated x is within 2px of the target.
+ */
+export async function moveToX(
+  c: HarnessClient,
+  targetX: number,
+  opts?: { timeoutMs?: number; pollMs?: number },
+): Promise<void> {
+  const timeoutMs = opts?.timeoutMs ?? 10000;
+  const pollMs = opts?.pollMs ?? 50;
+  const sessionId = c.sessionId;
+  if (!sessionId) throw new Error("moveToX: client not in room / no sessionId");
+  const start = Date.now();
+  let seq = 0;
+  let lastX = getXForPlayer(c, sessionId) ?? targetX;
+  while (Date.now() - start < timeoutMs) {
+    const current = getXForPlayer(c, sessionId);
+    if (current !== null) lastX = current;
+    if (Math.abs(lastX - targetX) < 2) return;
+    sendMove(c, { dx: targetX - lastX, dy: 0, seq: seq++ });
+    await new Promise<void>((r) => setTimeout(r, pollMs));
+  }
+  throw new Error(`moveToX: timeout reaching x=${targetX} (last observed ${lastX})`);
+}
+
+/** Starts a channel (prep/unprep/fake) for the given room. */
+export function startChannel(c: HarnessClient, type: "prep" | "unprep" | "fake", roomId: string): void {
+  if (!c.room) throw new Error("startChannel: client not in room");
+  c.room.send("channelStart", { type, roomId });
+}
+
+/** Explicitly cancels the client's active channel. */
+export function cancelChannel(c: HarnessClient): void {
+  if (!c.room) throw new Error("cancelChannel: client not in room");
+  c.room.send("channelCancel", {});
+}
+
+/** Polls until the given room's replicated state reaches `state`. */
+export async function waitForRoomState(
+  c: HarnessClient,
+  roomId: string,
+  state: "clean" | "prepped" | "trashed",
+  timeoutMs = 8000,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const rd = getRoomState(c, roomId);
+    if (rd && rd.state === state) return;
+    await new Promise<void>((r) => setTimeout(r, 80));
+  }
+  throw new Error(`waitForRoomState: timeout waiting for ${roomId}==${state}`);
+}
+
+/** Polls until the elevator car for `shaft` reaches `state`. */
+export async function waitForElevatorState(
+  c: HarnessClient,
+  shaft: string,
+  state: "idle" | "arriving" | "boarding",
+  timeoutMs = 6000,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const car = getElevatorCar(c, shaft);
+    if (car && car.state === state) return;
+    await new Promise<void>((r) => setTimeout(r, 50));
+  }
+  throw new Error(`waitForElevatorState: timeout waiting for shaft ${shaft}==${state}`);
+}
+
+/** Polls until the player's replicated floor reaches `floor`. */
+export async function waitForPlayerFloor(
+  c: HarnessClient,
+  sessionId: string,
+  floor: number,
+  timeoutMs = 6000,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const f = getPlayerFloor(c, sessionId);
+    if (f === floor) return;
+    await new Promise<void>((r) => setTimeout(r, 80));
+  }
+  throw new Error(`waitForPlayerFloor: timeout waiting for ${sessionId} on floor ${floor}`);
+}

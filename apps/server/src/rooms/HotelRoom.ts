@@ -521,6 +521,18 @@ export class HotelRoom extends Room<RoomState> {
     if (tickArrival(runtime, Date.now())) {
       this.syncElevatorCar(car, runtime);
       this.scheduleElevatorRide(shaft);
+    } else if (runtime.state === "arriving") {
+      // The room clock accumulates real-time deltas but its elapsed time can
+      // cross the delay a tick or two before wall-clock reaches arriveAt
+      // (clock elapsed leads Date.now by up to one simulation tick). Firing
+      // early must re-arm for the remaining delay instead of abandoning the
+      // arrival, or the car stays "arriving" forever.
+      const remaining = Math.max(0, runtime.arriveAt - Date.now());
+      this.elevatorArriveTimeout.set(
+        shaft,
+        this.clock.setTimeout(() => this.handleElevatorArrived(shaft), remaining),
+      );
+      return;
     }
     this.elevatorArriveTimeout.delete(shaft);
   }

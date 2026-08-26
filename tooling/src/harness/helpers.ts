@@ -13,7 +13,23 @@ export {
   sendMove,
   getXForPlayer,
   disconnect,
+  getRooms,
+  getPlayerState,
+  getElevatorCar,
+  moveToX,
+  startChannel,
+  cancelChannel,
+  waitForRoomState,
+  waitForElevatorState,
+  waitForPlayerFloor,
 } from "./clients.js";
 
-export type { HarnessClient, StateRecord, CollectedState } from "./clients.js";
+export type {
+  HarnessClient,
+  StateRecord,
+  CollectedState,
+  RoomSnapshot,
+  PlayerSnapshot,
+  ElevatorSnapshot,
+} from "./clients.js";
 export type { SpawnedServer } from "./spawn.js";
