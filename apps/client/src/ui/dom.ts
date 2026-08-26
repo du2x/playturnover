@@ -39,6 +39,21 @@ export function createButton(
   return btn;
 }
 
+export function createSelect(
+  options: Array<{ value: string; label: string }>,
+  opts?: { id?: string; value?: string },
+): HTMLSelectElement {
+  const sel = createEl("select", { id: opts?.id }) as HTMLSelectElement;
+  for (const opt of options) {
+    const option = document.createElement("option");
+    option.value = opt.value;
+    option.textContent = opt.label;
+    sel.appendChild(option);
+  }
+  if (opts?.value !== undefined) sel.value = opts.value;
+  return sel;
+}
+
 export function createInput(
   placeholder: string,
   opts?: { id?: string; value?: string; maxLength?: number },

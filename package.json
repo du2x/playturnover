@@ -13,6 +13,13 @@
     "dev:client": "pnpm --filter @grandhotel/client dev",
     "smoke:local": "pnpm --filter @grandhotel/tooling smoke:local",
     "smoke:remote": "pnpm --filter @grandhotel/tooling smoke:remote",
-    "verify:m0": "pnpm --filter @grandhotel/tooling verify:m0"
+    "verify:m0": "bash scripts/verify-m0.sh",
+    "validate:spec": "python3 scripts/validate-spec.py",
+    "validate:plan": "python3 scripts/validate-plan.py",
+    "validate:state": "python3 scripts/validate-state.py",
+    "check:commit": "python3 scripts/check-commit.py"
+  },
+  "dependencies": {
+    "nvm": "^0.0.4"
   }
 }

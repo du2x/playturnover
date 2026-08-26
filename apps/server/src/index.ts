@@ -1,6 +1,8 @@
 import express from "express";
-import { Server } from "colyseus";
+import { Server } from "./colyseus-compat.js";
 import { createServer } from "http";
+import { HotelRoom } from "./rooms/HotelRoom.js";
+import { mountStatic } from "./static.js";
 
 export function createApp(): express.Express {
   const app = express();
@@ -8,20 +10,27 @@ export function createApp(): express.Express {
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true });
   });
-  app.get("/", (_req, res) => {
-    res.send("ok");
-  });
+  mountStatic(app);
+  // Fallback for dev mode (no STATIC_DIR): keep placeholder GET /.
+  // When STATIC_DIR is set, mountStatic already serves index.html and the
+  // SPA fallback, so this handler is shadowed (registered after static).
+  if (!process.env.STATIC_DIR) {
+    app.get("/", (_req, res) => {
+      res.send("ok");
+    });
+  }
   return app;
 }
 
 export function createGameServer(): {
   app: express.Express;
   httpServer: ReturnType<typeof createServer>;
-  gameServer: Server;
+  gameServer: InstanceType<typeof Server>;
 } {
   const app = createApp();
   const httpServer = createServer(app);
   const gameServer = new Server({ server: httpServer });
+  gameServer.define("hotel", HotelRoom);
   return { app, httpServer, gameServer };
 }
 

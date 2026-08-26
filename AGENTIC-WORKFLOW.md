@@ -38,8 +38,36 @@ ramp-up (commands, architecture, conventions) lives in `AGENTS.md`.
 ```
 
 The orchestrator updates `STATE.md` after every phase transition
-(`pending → specifying → planning → building → verifying → done | blocked`),
+(`pending → specifying → planning → building → verifying → done | blocked | hotfixing`),
 appending a dated log line per event and recording blockers verbatim.
+
+### Hotfix workflow (out-of-band repair)
+
+Use when `BUILD` or `VERIFY` is blocked by an infrastructure / dependency / scaffolding
+breakage that is not a spec or plan error (e.g. registry unpublishes a pinned version,
+`pnpm install` fails, container base image deprecated). A hotfix does not re-spec or
+re-plan the milestone — it repairs the tree so the current phase can resume.
+
+```
+  building ─┐
+            ├─► hotfixing ─► building (resume) ─► verifying ─► done
+  verifying ┘        ▲               │
+  blocked   ─────────┘               └─► blocked (if hotfix fails twice → escalate)
+```
+
+Rules:
+- Trigger: orchestrator sets milestone `Status=hotfix`, `Phase=HOTFIX`, records blocker
+  and `HOTFIX started → <reason>` in `STATE.md` Log (immediate, not batched).
+- Scope: minimal repair only — dependency pins, scaffold gaps, tooling scripts,
+  `Dockerfile`/CI shims. No spec/plan edits, no feature scope change.
+- Execution: orchestrator (or a single `builder` with task id `HOTFIX-<M#>`) applies the
+  fix and runs the phase's original verify step (`pnpm install && pnpm -r typecheck/build/test`
+  for a BUILD hotfix). One retry allowed.
+- Exit: `PASS` → set `Status=building` (or `verifying` if the hotfix was during verify),
+  append `HOTFIX done → resume <phase>` to Log and continue the normal pipeline.
+  `FAIL` twice → `Status=blocked`, record failing criteria, escalate to human.
+- Audit: hotfix reason, files touched, and verification evidence are appended to
+  `STATE.md` Decisions and Log; no new spec/plan artifact is created.
 
 ## Rules
 

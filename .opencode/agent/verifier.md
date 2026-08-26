@@ -47,6 +47,16 @@ Date: <today> · Loop: <n>
 
 An honest FAIL with precise causes is a successful verification. Never soften a verdict.
 
+## Closing gate (run after writing the report)
+
+```bash
+python3 scripts/validate-state.py <M#>   # e.g. python3 scripts/validate-state.py M1
+```
+
+- Must exit 0 for the milestone to be considered done (verdict PASS + evidence present).
+- Failure means the report is hollow, FAIL, or missing file:line evidence — fix the report or route gaps to builders, then re-run.
+- For M0, prose evidence is accepted (WARN only); M1+ requires at least one `file:line` citation per automated V (evidence-or-zero, per tlc-spec-driven).
+
 ## Final message back
 
-Verdict · pass/fail/unverifiable counts · one line per failure.
+Verdict · pass/fail/unverifiable counts · one line per failure · validate-state exit code.

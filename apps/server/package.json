@@ -10,9 +10,9 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@colyseus/schema": "^0.5.70",
+    "@colyseus/schema": "^2.0.37",
     "@grandhotel/shared": "workspace:*",
-    "colyseus": "^0.15.26",
+    "colyseus": "^0.15.57",
     "express": "^4.19.2",
     "zod": "^3.23.8"
   },

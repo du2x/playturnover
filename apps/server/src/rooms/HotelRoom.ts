@@ -1,6 +1,7 @@
 import { Room } from "../colyseus-compat.js";
 import type { Client } from "colyseus";
 import {
+  COVERAGE_TARGET,
   ELEVATOR_ARRIVE_MS,
   ELEVATOR_RIDE_MS,
   HALLWAY_MAX_X,
@@ -18,6 +19,7 @@ import {
   PlayerState,
   RoomData,
   RoomState,
+  TraitorReveal,
 } from "@grandhotel/shared";
 import {
   AdvancePhaseMsgSchema,
@@ -30,6 +32,7 @@ import {
 } from "@grandhotel/shared";
 import { getAllRoomIds, getRoomRect, getElevatorX } from "@grandhotel/shared";
 import { isInsideRoom } from "@grandhotel/shared";
+import type { RoomStateType } from "@grandhotel/shared";
 import {
   callElevator,
   completeRide,
@@ -84,6 +87,7 @@ export class HotelRoom extends Room<RoomState> {
   private elevatorRideTimeout = new Map<string, unknown>();
   private activeChannels = new Map<string, Channel>();
   private channelTimeouts = new Map<string, unknown>();
+  private shiftTimer: unknown = null;
 
   onCreate(options: unknown): void {
     const opts = options as Record<string, unknown> | null | undefined;
@@ -233,6 +237,10 @@ export class HotelRoom extends Room<RoomState> {
         this.state.hostSessionId = "";
       }
     }
+
+    if (this.state.phase === "playing") {
+      this.checkAttritionWin();
+    }
   }
 
   private handleMove(client: Client, raw: unknown): void {
@@ -318,6 +326,90 @@ export class HotelRoom extends Room<RoomState> {
       }
     }
     // reveal stays null until results — never write role into broadcast map
+
+    this.startShiftTimer();
+  }
+
+  /** Starts the 1-second interval that checks for the shift buzzer. */
+  private startShiftTimer(): void {
+    this.clearShiftTimer();
+    this.shiftTimer = this.clock.setInterval(() => {
+      this.checkBuzzer();
+    }, 1000);
+  }
+
+  private clearShiftTimer(): void {
+    if (this.shiftTimer !== undefined && this.shiftTimer !== null) {
+      const delayed = this.shiftTimer as unknown as { clear?: () => void };
+      if (typeof delayed.clear === "function") delayed.clear();
+      this.shiftTimer = null;
+    }
+  }
+
+  /** Shared path for declaring the end of the round. */
+  private endRound(winner: "staff" | "saboteur"): void {
+    if (this.state.phase === "results") return;
+
+    const preppedCount = [...this.state.rooms.values()].filter((r) => r.state === "prepped").length;
+    this.state.coverage = preppedCount / ROOM_COUNT;
+
+    this.state.winner = winner;
+    this.state.phase = "results";
+
+    if (this.saboteurSessionId) {
+      const saboteur = this.state.players.get(this.saboteurSessionId);
+      if (saboteur) {
+        const reveal = new TraitorReveal();
+        reveal.sessionId = this.saboteurSessionId;
+        reveal.name = saboteur.name;
+        this.state.traitorReveal = reveal;
+      } else {
+        // Saboteur disconnected; best-effort reveal from private map cache is unavailable,
+        // so leave traitorReveal null. Tests that need reveal keep saboteur connected.
+        this.state.traitorReveal = null;
+      }
+    }
+
+    this.clearShiftTimer();
+    this.broadcastResults();
+  }
+
+  private checkBuzzer(): void {
+    if (this.state.phase !== "playing") return;
+    if (Date.now() >= this.state.shiftEndsAt) {
+      const preppedCount = [...this.state.rooms.values()].filter((r) => r.state === "prepped").length;
+      const coverage = preppedCount / ROOM_COUNT;
+      const winner: "staff" | "saboteur" = coverage >= COVERAGE_TARGET ? "staff" : "saboteur";
+      this.endRound(winner);
+    }
+  }
+
+  /** R-12 attrition: if non-disconnected staff count drops to 1, saboteur wins. */
+  private checkAttritionWin(): void {
+    if (this.state.phase !== "playing") return;
+    const totalConnected = this.state.players.size;
+    const saboteurConnected = this.saboteurSessionId ? (this.state.players.has(this.saboteurSessionId) ? 1 : 0) : 0;
+    const staffCount = totalConnected - saboteurConnected;
+    if (staffCount <= 1) {
+      this.endRound("saboteur");
+    }
+  }
+
+  private broadcastResults(): void {
+    const traitorReveal = this.state.traitorReveal;
+    const payload = {
+      winner: this.state.winner,
+      traitorReveal: traitorReveal
+        ? { sessionId: traitorReveal.sessionId, name: traitorReveal.name }
+        : { sessionId: "", name: "" },
+      coverage: this.state.coverage,
+    };
+    for (const c of this.clientMap.values()) {
+      const anyC = c as unknown as { send?: (t: string, d: unknown) => void };
+      if (typeof anyC.send === "function") {
+        anyC.send("results", payload);
+      }
+    }
   }
 
   // ── elevator helpers ───────────────────────────────────────────────────────
@@ -574,6 +666,23 @@ export class HotelRoom extends Room<RoomState> {
       if (typeof delayed.clear === "function") delayed.clear();
       this.channelTimeouts.delete(sessionId);
     }
+  }
+
+  /**
+   * Visibility filtering helper (R-10): returns the subset of room states that
+   * should be observable to the given session id. Only rooms where the player is
+   * physically inside are included.
+   */
+  public getVisibleRooms(sessionId: string): Record<string, RoomStateType> {
+    const player = this.state.players.get(sessionId);
+    if (!player) return {};
+    const visible: Record<string, RoomStateType> = {};
+    for (const [id, room] of this.state.rooms.entries()) {
+      if (isInsideRoom(player.x, player.floor, id)) {
+        visible[id] = room.state;
+      }
+    }
+    return visible;
   }
 
   /** Exposed for server unit tests — not part of public API */

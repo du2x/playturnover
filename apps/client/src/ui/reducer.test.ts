@@ -2,13 +2,24 @@ import { describe, it, expect } from "vitest";
 import { initialState, uiReducer, filterCodeInput } from "./reducer.js";
 import { ROOM_CODE_ALPHABET } from "@grandhotel/shared";
 import type { RoomStateView } from "../net/GameClient.js";
+import type { ElevatorShaft } from "@grandhotel/shared";
 
 function makeView(overrides?: Partial<RoomStateView>): RoomStateView {
   return {
-    players: [{ id: "a1", name: "Alice", colorIndex: 0, x: 100 }],
+    players: [{ id: "a1", name: "Alice", colorIndex: 0, x: 100, floor: 0 }],
     phase: "waiting",
     mySessionId: "a1",
     hostSessionId: "a1",
+    myRole: null,
+    myFloor: 0,
+    roomsView: {},
+    elevatorsView: {
+      A: { floor: 0, state: "idle" },
+      B: { floor: 0, state: "idle" },
+    },
+    shiftEndsAt: null,
+    winner: null,
+    traitorReveal: null,
     ...overrides,
   };
 }
@@ -89,6 +100,66 @@ describe("ui reducer — lobby flow (M0.3.3)", () => {
     // generic error surfaces message
     s = uiReducer(s, { type: "clientEvent", event: { type: "error", message: "boom" } });
     expect(s.error).toBe("boom");
+  });
+
+  it("start gating error surfaces reason into state.error", () => {
+    let s = uiReducer(initialState, { type: "submitName", name: "Host" });
+    s = uiReducer(s, { type: "joined", code: "ABCD" });
+    s = uiReducer(s, {
+      type: "clientEvent",
+      event: { type: "rejected", reason: "need-4-players" },
+    });
+    expect(s.error).toMatch(/need-4-players/i);
+
+    s = uiReducer(s, {
+      type: "clientEvent",
+      event: { type: "rejected", reason: "not-saboteur" },
+    });
+    expect(s.error).toMatch(/not-saboteur/i);
+  });
+
+  it("stateUpdate carries new RoomStateView fields", () => {
+    const view = makeView({
+      myRole: "staff",
+      myFloor: 2,
+      roomsView: { "2-0": "clean", "2-1": null },
+      elevatorsView: {
+        A: { floor: 1, state: "arriving" } as { floor: number; state: "idle" | "arriving" | "boarding" },
+        B: { floor: 2, state: "idle" },
+      },
+      shiftEndsAt: 123456,
+      winner: null,
+      traitorReveal: null,
+    });
+    let s = uiReducer(initialState, { type: "submitName", name: "Observer" });
+    s = uiReducer(s, { type: "joined", code: "WXYZ" });
+    s = uiReducer(s, { type: "stateUpdate", view });
+    expect(s.screen).toBe("inRoom");
+    if (s.screen === "inRoom") {
+      expect(s.view?.myRole).toBe("staff");
+      expect(s.view?.myFloor).toBe(2);
+      expect(s.view?.roomsView["2-0"]).toBe("clean");
+      expect(s.view?.roomsView["2-1"]).toBeNull();
+      expect(s.view?.elevatorsView.A.floor).toBe(1);
+      expect(s.view?.shiftEndsAt).toBe(123456);
+    }
+  });
+
+  it("results: banner state surfaces winner and traitor reveal", () => {
+    const view = makeView({
+      phase: "results",
+      winner: "saboteur",
+      traitorReveal: { sessionId: "sess-traitor", name: "Morgana" },
+    });
+    let s = uiReducer(initialState, { type: "submitName", name: "Wren" });
+    s = uiReducer(s, { type: "joined", code: "PQRS" });
+    s = uiReducer(s, { type: "stateUpdate", view });
+    expect(s.screen).toBe("inRoom");
+    if (s.screen === "inRoom") {
+      expect(s.view?.phase).toBe("results");
+      expect(s.view?.winner).toBe("saboteur");
+      expect(s.view?.traitorReveal).toEqual({ sessionId: "sess-traitor", name: "Morgana" });
+    }
   });
 
   it("filterCodeInput uppercase and alphabet-only, truncates to 4", () => {

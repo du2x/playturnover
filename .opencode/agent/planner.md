@@ -54,6 +54,16 @@ Write exactly one file: `.dev/plans/<M#>-plan.md`. Touch nothing else.
 - Every Verify step must be runnable by a builder without inventing infrastructure.
 - Flag (do not silently fix) any spec gap you discover — report it back.
 
+## Deterministic gate (must pass before returning)
+
+```bash
+python3 scripts/validate-plan.py .dev/plans/<M#>-plan.md --spec .dev/specs/<M#>-spec.md
+```
+
+- Exit 0 = presentable. Fix every ERROR (missing Verify, forward-phase dependency, cycle, file-disjoint violation) before returning.
+- Warnings (granularity smell, coverage gap) are soft unless `--strict`; mention them in your final message so the orchestrator decides.
+- Upstream reference: `.opencode/skills/tlc-spec-driven/scripts/validate_tasks.py` — adapted Turnover gate above is canonical.
+
 ## Final message back
 
-Task count · stage count · critical path · parallel groups · spec coverage gaps (or "none").
+Task count · stage count · critical path · parallel groups · spec coverage gaps (or "none") · gate exit code.

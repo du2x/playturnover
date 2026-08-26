@@ -4,7 +4,12 @@ import type { UIAction, UIState } from "./ui/reducer.js";
 import { filterCodeInput, initialState, uiReducer } from "./ui/reducer.js";
 import { renderOverlay } from "./ui/screens.js";
 import { Interpolator } from "./movement/interpolate.js";
-import { CLIENT_INPUT_SEND_HZ, PLAYER_SPEED_PX_S } from "@grandhotel/shared";
+import {
+  CLIENT_INPUT_SEND_HZ,
+  PLAYER_SPEED_PX_S,
+  PREP_TIME_MS,
+  UNPREP_TIME_MS,
+} from "@grandhotel/shared";
 import type { HallScene as HallSceneType } from "./game/HallScene.js";
 
 let uiState: UIState = initialState;
@@ -16,12 +21,61 @@ let inputTimer: ReturnType<typeof setInterval> | null = null;
 let rafId: number | null = null;
 let seq = 0;
 let gameStarting = false;
+let resultsFrozen = false;
 
 const client = new ColyseusGameClient();
+
+// Channel state tracked locally for the hold-E overlay progress bar.
+type ActiveChannel = {
+  roomId: string;
+  type: "prep" | "unprep" | "fake";
+  startAt: number;
+};
+let channelActive: ActiveChannel | null = null;
+let channelKeyHeld = false;
 
 function getOverlay(): HTMLElement | null {
   if (typeof document === "undefined") return null;
   return document.getElementById("overlay");
+}
+
+function getHud(): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  return document.getElementById("hud");
+}
+
+function getChannelBar(): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  return document.getElementById("channel-bar");
+}
+
+function getChannelLabel(): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  return document.getElementById("channel-label");
+}
+
+function getChannelFill(): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  return document.getElementById("channel-fill");
+}
+
+function ensureHudElements(overlay: HTMLElement): void {
+  if (!getHud()) {
+    const hud = document.createElement("div");
+    hud.id = "hud";
+    hud.hidden = true;
+    overlay.append(hud);
+  }
+  if (!getChannelBar()) {
+    const bar = document.createElement("div");
+    bar.id = "channel-bar";
+    bar.hidden = true;
+    bar.innerHTML = `
+      <div id="channel-label"></div>
+      <div id="channel-track"><div id="channel-fill"></div></div>
+    `;
+    overlay.append(bar);
+  }
 }
 
 async function ensureGameStarted(view: RoomStateView): Promise<void> {
@@ -36,6 +90,9 @@ async function ensureGameStarted(view: RoomStateView): Promise<void> {
     ]);
     const sceneInstance = new HallScene() as HallSceneType;
     sceneInstance.setLocalColorIndex(myColor);
+    sceneInstance.onElevatorCall((shaft) => {
+      if (!resultsFrozen) client.callElevator(shaft);
+    });
 
     // Phaser will mount canvas into #app
     game = new Phaser.Game({
@@ -53,9 +110,10 @@ async function ensureGameStarted(view: RoomStateView): Promise<void> {
     const ms = Math.round(1000 / CLIENT_INPUT_SEND_HZ);
     inputTimer = setInterval(() => {
       if (!hallScene) return;
+      if (resultsFrozen) return;
       const dir = hallScene.consumeInputDir();
       if (dir !== 0) {
-        const dx = dir * PLAYER_SPEED_PX_S / CLIENT_INPUT_SEND_HZ;
+        const dx = (dir * PLAYER_SPEED_PX_S) / CLIENT_INPUT_SEND_HZ;
         seq += 1;
         client.sendMove({ dx, dy: 0, seq });
       }
@@ -67,16 +125,110 @@ async function ensureGameStarted(view: RoomStateView): Promise<void> {
         rafId = null;
         return;
       }
-      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+      const now =
+        typeof performance !== "undefined" ? performance.now() : Date.now();
       for (const [id, interp] of interpolators) {
         const x = interp.sample(now);
         hallScene.setRemoteX(id, x);
       }
+
+      // Keep overlays in sync every frame (timer countdown, channel hold bar)
+      updateChannelBar(now);
+      const view = uiState.screen === "inRoom" ? uiState.view : null;
+      if (view) updateHud(view);
+
+      // Walk-out cancels an active channel on the client side (R-9)
+      if (channelActive && !resultsFrozen) {
+        const currentRoom = hallScene.getCurrentRoom();
+        if (currentRoom !== channelActive.roomId) {
+          client.cancelChannel();
+          clearChannelActive();
+        }
+      }
+
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
   } catch {
     gameStarting = false;
+  }
+}
+
+function clearChannelActive(): void {
+  channelActive = null;
+  channelKeyHeld = false;
+}
+
+function channelDuration(type: ActiveChannel["type"]): number {
+  return type === "unprep" ? UNPREP_TIME_MS : PREP_TIME_MS;
+}
+
+function updateChannelBar(now: number): void {
+  const bar = getChannelBar();
+  const fill = getChannelFill();
+  const label = getChannelLabel();
+  if (!bar || !fill || !label) return;
+
+  if (!channelActive) {
+    bar.hidden = true;
+    return;
+  }
+
+  const max = channelDuration(channelActive.type);
+  const elapsed = now - channelActive.startAt;
+  const pct = Math.max(0, Math.min(100, (elapsed / max) * 100));
+  fill.style.width = `${pct}%`;
+  // Real prep and fake use identical visuals; unprep shows red.
+  fill.style.background = channelActive.type === "unprep" ? "#b00020" : "#4caf50";
+  label.textContent =
+    channelActive.type === "unprep"
+      ? "SABOTAGING..."
+      : channelActive.type === "fake"
+        ? "PREPPING..."
+        : "PREPPING...";
+  bar.hidden = false;
+}
+
+function updateHud(view: RoomStateView | null): void {
+  const hud = getHud();
+  if (!hud) return;
+
+  if (uiState.screen !== "inRoom" || !view) {
+    hud.hidden = true;
+    return;
+  }
+
+  hud.hidden = false;
+  if (view.phase === "results") {
+    hud.textContent = "ROUND OVER";
+    return;
+  }
+  if (view.phase === "waiting") {
+    hud.textContent = "WAITING FOR HOST";
+    return;
+  }
+
+  const end = view.shiftEndsAt;
+  if (!end || end <= 0) {
+    hud.textContent = "";
+    return;
+  }
+  const remainingMs = Math.max(0, end - Date.now());
+  const totalSeconds = Math.ceil(remainingMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  hud.textContent = `Shift: ${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function syncLocalState(view: RoomStateView): void {
+  if (!hallScene) return;
+  if (view.myFloor !== hallScene.getLocalFloor()) {
+    // Floor change cancels any active channel (R-9)
+    if (channelActive) {
+      client.cancelChannel();
+      clearChannelActive();
+    }
+    hallScene.setFloor(view.myFloor);
   }
 }
 
@@ -90,10 +242,11 @@ function syncRoster(view: RoomStateView): void {
     if (!interp) {
       interp = new Interpolator();
       interpolators.set(p.id, interp);
-      hallScene.addRemote(p.id, p.colorIndex);
+      hallScene.addRemote(p.id, p.colorIndex, p.floor);
     }
-    const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     interp.push(now, p.x);
+    hallScene.setRemoteFloor(p.id, p.floor);
   }
   for (const id of [...interpolators.keys()]) {
     if (!remoteIds.has(id)) {
@@ -109,8 +262,11 @@ function dispatch(action: UIAction): void {
   rerender();
   // Side-effects driven by InRoom view
   if (next.screen === "inRoom" && next.view) {
+    resultsFrozen = next.view.phase === "results";
     void ensureGameStarted(next.view);
+    syncLocalState(next.view);
     syncRoster(next.view);
+    updateHud(next.view);
   }
 }
 
@@ -151,6 +307,25 @@ const handlers = {
       // surfaced via onEvent
     }
   },
+  onStartRound: (): void => {
+    client.startRound();
+  },
+  onCallElevator: (shaft: "A" | "B"): void => {
+    if (resultsFrozen) return;
+    client.callElevator(shaft);
+  },
+  onRideElevator: (shaft: "A" | "B", destFloor: number): void => {
+    if (resultsFrozen) return;
+    client.rideElevator(shaft, destFloor);
+  },
+  onStartChannel: (type: "prep" | "unprep" | "fake", roomId: string): void => {
+    if (resultsFrozen) return;
+    client.startChannel(type, roomId);
+  },
+  onCancelChannel: (): void => {
+    client.cancelChannel();
+    clearChannelActive();
+  },
   onAdvancePhase: (): void => {
     client.advancePhase();
   },
@@ -168,14 +343,84 @@ client.onEvent((ev) => {
   dispatch({ type: "clientEvent", event: ev });
 });
 
+// Keyboard hold actions (channels). Mirrors the on-screen channel controls.
+function onKeyDown(e: KeyboardEvent): void {
+  if (channelKeyHeld) return;
+  if (!hallScene) return;
+  if (resultsFrozen) return;
+  if (uiState.screen !== "inRoom") return;
+  const view = uiState.view;
+  if (!view || view.phase !== "playing") return;
+  if (e.repeat) return;
+  if (e.key.toLowerCase() !== "e") return;
+
+  const roomId = hallScene.getCurrentRoom();
+  if (!roomId) return;
+
+  const role = view.myRole;
+  if (role !== "staff" && role !== "saboteur") return;
+
+  const state = view.roomsView[roomId];
+
+  let type: "prep" | "unprep" | "fake" | null = null;
+  if (e.shiftKey) {
+    if (role === "saboteur") type = "fake";
+  } else if (role === "saboteur" && (state === "prepped" || state === "trashed")) {
+    type = "unprep";
+  } else {
+    type = "prep";
+  }
+
+  // Avoid client-side spam for states the server would reject.
+  if (role === "staff" && type === "prep" && state !== "clean") return;
+  if (!type) return;
+
+  channelKeyHeld = true;
+  const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+  channelActive = { roomId, type, startAt: now };
+  client.startChannel(type, roomId);
+  e.preventDefault();
+}
+
+function onKeyUp(e: KeyboardEvent): void {
+  if (!channelKeyHeld) return;
+  if (e.key.toLowerCase() === "e") {
+    client.cancelChannel();
+    clearChannelActive();
+  }
+}
+
+function onWindowBlur(): void {
+  if (channelKeyHeld) {
+    client.cancelChannel();
+    clearChannelActive();
+  }
+}
+
+function setupInputListeners(): void {
+  if (typeof window === "undefined") return;
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
+  window.addEventListener("blur", onWindowBlur);
+}
+
+function removeInputListeners(): void {
+  if (typeof window === "undefined") return;
+  window.removeEventListener("keydown", onKeyDown);
+  window.removeEventListener("keyup", onKeyUp);
+  window.removeEventListener("blur", onWindowBlur);
+}
+
 // Initial boot: show name screen (reducer Idle) or rerender
 function boot(): string {
   const overlay = getOverlay();
   if (overlay) {
+    ensureHudElements(overlay);
     // Keep import.meta.env.VITE_GAME_URL wiring intact — ColyseusGameClient reads it internally
     void import.meta;
     rerender();
   }
+  setupInputListeners();
   // Also ensure HallScene local feedback runs every frame via its own update (instant self-feedback)
   // Remote interpolation and input pump start only after entering room (ensureGameStarted)
   return "boot";
@@ -202,6 +447,7 @@ if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => {
     if (inputTimer) clearInterval(inputTimer);
     if (rafId !== null) cancelAnimationFrame(rafId);
+    removeInputListeners();
     client.disconnect();
     if (game) {
       try {

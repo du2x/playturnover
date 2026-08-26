@@ -18,3 +18,90 @@ body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-
 #overlay .error { color: #b00020; margin: 6px 0; font-size: 13px; }
 #overlay #room-code { font-family: monospace; letter-spacing: 0.1em; margin: 6px 0; }
 .hidden { display: none !important; }
+
+/* Results banner v1 */
+.results-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.75);
+  z-index: 20;
+  pointer-events: auto;
+}
+
+.results-banner {
+  background: #f5f5f5;
+  color: #111;
+  padding: 24px 32px;
+  border-radius: 6px;
+  text-align: center;
+  border: 2px solid #888;
+  min-width: 280px;
+}
+
+.results-title {
+  margin: 0 0 12px;
+  font-size: 28px;
+  text-transform: uppercase;
+}
+
+.results-title.staff-win { color: #2a7f2a; }
+.results-title.saboteur-win { color: #b00020; }
+
+.results-traitor {
+  font-size: 16px;
+  font-family: monospace;
+}
+
+/* HUD overlays */
+#hud {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 16px;
+  pointer-events: none;
+  z-index: 15;
+}
+
+#channel-bar {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 240px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  padding: 10px 12px;
+  border-radius: 4px;
+  text-align: center;
+  pointer-events: none;
+  z-index: 15;
+}
+
+#channel-label {
+  font-size: 13px;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+#channel-track {
+  width: 100%;
+  height: 10px;
+  background: #444;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+#channel-fill {
+  width: 0%;
+  height: 100%;
+  background: #4caf50;
+  transition: width 30ms linear;
+}

@@ -9,6 +9,16 @@ export type UIState =
   | { screen: "named"; name: string; codeInput: string; error?: string }
   | { screen: "inRoom"; name: string; code: string; view: RoomStateView | null; error?: string };
 
+export type BannerState =
+  | { visible: false }
+  | { visible: true; winner: RoomStateView["winner"]; traitorReveal: RoomStateView["traitorReveal"] };
+
+/** Derives the results banner state from a RoomStateView. */
+export function getBannerState(view: RoomStateView | null): BannerState {
+  if (!view || view.phase !== "results") return { visible: false };
+  return { visible: true, winner: view.winner, traitorReveal: view.traitorReveal };
+}
+
 export const initialState: UIState = { screen: "idle" };
 
 export type UIAction =
@@ -20,7 +30,8 @@ export type UIAction =
   | { type: "stateUpdate"; view: RoomStateView }
   | { type: "clientEvent"; event: ClientEvent }
   | { type: "dismissError" }
-  | { type: "leave" };
+  | { type: "leave" }
+  | { type: "clearRoleCache" };
 
 export function filterCodeInput(input: string): string {
   const upper = input.toUpperCase();
@@ -99,6 +110,10 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
       }
       if (state.screen === "named") return state;
       return { screen: "idle" };
+    }
+    case "clearRoleCache": {
+      // UI signal only; role is cached in GameClient
+      return state;
     }
     default:
       return state;

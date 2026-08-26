@@ -5,7 +5,10 @@
     "outDir": "dist",
     "composite": true,
     "module": "ESNext",
-    "lib": ["ES2022"]
+    "lib": ["ES2022"],
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": false,
+    "useDefineForClassFields": false
   },
   "include": ["src", "test"]
 }

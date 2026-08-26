@@ -55,6 +55,19 @@ V-2 (covers R-2): ...
 - If the milestone cannot be specified without guessing, list the blocking questions under
   Open Questions and say "BLOCKED" explicitly in your final message.
 
+## Deterministic gate (must pass before returning)
+
+Run the repo's spec gate before you finish — it is not optional:
+
+```bash
+python3 scripts/validate-spec.py .dev/specs/<M#>-spec.md
+```
+
+- Exit 0 = presentable. Non-zero = fix the ERROR lines before you report back.
+- The gate checks: required sections present, R/V ids well-formed, every R has a covering V, V entries mention an executable check, assumptions closed.
+- Warnings are advisory (EARS SHALL advisory, etc.) unless `--strict` is passed. Do not re-run with `--strict` unless the orchestrator asks.
+- The upstream TLC reference validator lives at `.opencode/skills/tlc-spec-driven/scripts/validate_spec.py` but the repo gate above is the adapted Turnover version — use that one.
+
 ## Final message back
 
 Path written · requirement count · verification count · automated vs manual split ·

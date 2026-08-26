@@ -27,12 +27,14 @@ and verification criteria (how each requirement gets proven). When it returns:
 read the spec yourself. If it has no verification section, contradicts prd.md/roadmap.md,
 or leaves blocking open questions unanswered — bounce it back ONCE with precise corrections.
 Still bad → mark milestone blocked in STATE.md, surface to user.
+**Deterministic gate:** before accepting, run `python3 scripts/validate-spec.py .dev/specs/<M#>-spec.md` — non-zero = bounce back (same as manual check).
 
 ### 2. PLAN — spawn `planner`
 Give it the milestone ID. It writes `.dev/plans/<M#>-plan.md`: atomic tasks grouped into
 sequential stages, parallel groups inside a stage, explicit `depends_on`, per-task verify step.
 Sanity-check before building: every spec requirement maps to ≥1 task, every task cites its
 spec refs, no circular dependencies, foundations come first.
+**Deterministic gate:** `python3 scripts/validate-plan.py .dev/plans/<M#>-plan.md --spec .dev/specs/<M#>-spec.md` must exit 0.
 
 ### 3. BUILD — spawn `builder` subagents strictly by the plan
 - Respect stage order: a stage starts only when all tasks it depends on are done.
@@ -45,11 +47,11 @@ spec refs, no circular dependencies, foundations come first.
 ### 4. VERIFY — spawn `verifier`
 Only when the plan's final stage completes. It independently executes every V-* criterion
 from the spec and writes `.dev/reports/<M#>-verification.md`.
-- Verdict PASS → update STATE.md (milestone done), move on to the next milestone or stop
-  and summarize when none remain / user wants to pause.
+- Verdict PASS → run closing gate `python3 scripts/validate-state.py <M#>` (must be 0) → update STATE.md (milestone done), move on to the next milestone or stop and summarize when none remain / user wants to pause.
 - Verdict FAIL → send ONLY the failed items as new builder tasks, then re-run the verifier.
 - After 2 failed build→verify loops: STOP, set status `blocked`, write the exact failing
   criteria into STATE.md, escalate to the user.
+- **Blast radius:** approving a spec/plan authorizes local commits only. `git push`, force-push, deploy, production DB changes require explicit go-ahead for that action.
 
 ## State discipline
 

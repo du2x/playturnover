@@ -1,8 +1,12 @@
 import { Client } from "colyseus.js";
 import type { Room } from "colyseus.js";
+import { getAllRoomIds, getElevatorX, isInsideRoom } from "@grandhotel/shared";
+import type { ElevatorShaft, RoleType, RoomStateType } from "@grandhotel/shared";
 import type {
+  ChannelType,
   ClientEvent,
   DisplayName,
+  ElevatorStatus,
   GameClient,
   MoveMsg,
   RoomCode,
@@ -27,49 +31,134 @@ function getEndpoint(): string {
   return "http://localhost:2567";
 }
 
-function toView(state: unknown, mySessionId: string): RoomStateView | null {
+function toView(state: unknown, mySessionId: string, myRole: RoleType | null): RoomStateView | null {
   if (!state || typeof state !== "object") return null;
   const s = state as {
     players?: unknown;
     phase?: unknown;
     hostSessionId?: unknown;
+    rooms?: unknown;
+    elevators?: unknown;
+    shiftEndsAt?: unknown;
+    winner?: unknown;
+    traitorReveal?: unknown | null;
   };
+
   const players: RoomStateView["players"] = [];
+  let myFloor = 0;
   const rawPlayers = s.players as unknown;
   if (rawPlayers) {
-    // MapSchema has forEach, Map has forEach, plain object fallback
+    const mapper = (p: Record<string, unknown>, id: string): void => {
+      const pid = (p.sessionId as string) ?? id;
+      players.push({
+        id: pid,
+        name: (p.name as string) ?? "",
+        colorIndex: (p.colorIndex as number) ?? 0,
+        x: (p.x as number) ?? 0,
+        floor: (p.floor as number) ?? 0,
+      });
+      if (pid === mySessionId) {
+        myFloor = (p.floor as number) ?? 0;
+      }
+    };
     if (typeof (rawPlayers as { forEach?: unknown }).forEach === "function") {
-      (rawPlayers as Map<string, { sessionId: string; name: string; colorIndex: number; x: number }>).forEach(
-        (p: { sessionId: string; name: string; colorIndex: number; x: number }, id: string) => {
-          players.push({
-            id: p.sessionId ?? id,
-            name: p.name,
-            colorIndex: p.colorIndex,
-            x: p.x,
-          });
-        },
-      );
+      (rawPlayers as Map<string, Record<string, unknown>>).forEach(mapper);
     } else if (typeof rawPlayers === "object") {
       for (const [id, p] of Object.entries(rawPlayers as Record<string, unknown>)) {
-        const v = p as { sessionId?: string; name: string; colorIndex: number; x: number };
-        players.push({
-          id: v.sessionId ?? id,
-          name: v.name,
-          colorIndex: v.colorIndex,
-          x: v.x,
-        });
+        mapper(p as Record<string, unknown>, id);
       }
     }
   }
   players.sort((a, b) => a.colorIndex - b.colorIndex);
+
+  const me = players.find((p) => p.id === mySessionId);
+  const mx = me?.x ?? 0;
+  const mf = me?.floor ?? 0;
+
+  const roomsView: RoomStateView["roomsView"] = {};
+  for (const roomId of getAllRoomIds()) {
+    roomsView[roomId] = isInsideRoom(mx, mf, roomId) ? readRoomState(s.rooms, roomId) : null;
+  }
+
+  const elevatorsView: RoomStateView["elevatorsView"] = {
+    A: readElevator(s.elevators, "A"),
+    B: readElevator(s.elevators, "B"),
+  };
+
   const phase = (s.phase as RoomStateView["phase"]) ?? "waiting";
   const hostSessionId = (s.hostSessionId as string) ?? "";
+  const shiftEndsAt = typeof s.shiftEndsAt === "number" && s.shiftEndsAt > 0 ? s.shiftEndsAt : null;
+  const winner = normalizeWinner(s.winner);
+  const traitorReveal = normalizeTraitorReveal(s.traitorReveal);
+
   return {
     players,
     phase,
     mySessionId,
     hostSessionId,
+    myRole,
+    myFloor,
+    roomsView,
+    elevatorsView,
+    shiftEndsAt,
+    winner,
+    traitorReveal,
   };
+}
+
+function readRoomState(rooms: unknown, roomId: string): RoomStateType | null {
+  if (!rooms || typeof rooms !== "object") return null;
+  const entry = lookupMapLike(rooms, roomId);
+  if (!entry || typeof entry !== "object") return null;
+  const state = (entry as { state?: unknown }).state;
+  const allowed = ["clean", "prepped", "trashed"] as const;
+  return allowed.includes(state as RoomStateType) ? (state as RoomStateType) : null;
+}
+
+function readElevator(elevators: unknown, shaft: ElevatorShaft): { floor: number; state: ElevatorStatus } {
+  if (!elevators || typeof elevators !== "object") {
+    return { floor: 0, state: "idle" };
+  }
+  const e = lookupMapLike(elevators, shaft);
+  if (!e || typeof e !== "object") {
+    return { floor: 0, state: "idle" };
+  }
+  const state = (e as { state?: unknown }).state;
+  const allowed = ["idle", "arriving", "boarding"] as const;
+  return {
+    floor: (e as { floor?: number }).floor ?? 0,
+    state: allowed.includes(state as ElevatorStatus) ? (state as ElevatorStatus) : "idle",
+  };
+}
+
+function lookupMapLike(container: object, key: string): unknown {
+  const c = container as Record<string, unknown> & { get?: (k: string) => unknown; has?: (k: string) => boolean };
+  if (typeof c.get === "function") {
+    return c.get(key);
+  }
+  return c[key];
+}
+
+function normalizeWinner(value: unknown): RoleType | null {
+  if (value === "staff" || value === "saboteur") return value as RoleType;
+  return null;
+}
+
+function normalizeTraitorReveal(value: unknown): { sessionId: string; name: string } | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as { sessionId?: unknown; name?: unknown };
+  if (typeof v.sessionId === "string" && typeof v.name === "string") {
+    return { sessionId: v.sessionId, name: v.name };
+  }
+  return null;
+}
+
+function mapServerError(reasonOrMessage: string): ClientEvent {
+  const msg = reasonOrMessage ?? "";
+  if (msg === "need-4-players" || msg === "not-saboteur" || msg === "wrong-state") {
+    return { type: "rejected", reason: msg };
+  }
+  return { type: "error", message: msg, reason: msg };
 }
 
 function classifyJoinError(err: unknown): ClientEvent {
@@ -90,10 +179,12 @@ export class ColyseusGameClient implements GameClient {
   private stateCbs = new Set<(s: RoomStateView) => void>();
   private eventCbs = new Set<(e: ClientEvent) => void>();
   private lastView: RoomStateView | null = null;
+  private myRole: RoleType | null = null;
 
   private emitState(): void {
     if (!this.room) return;
-    const view = toView((this.room as unknown as { state: unknown }).state, this.room.sessionId);
+    const rawState = (this.room as unknown as { state: unknown }).state;
+    const view = toView(rawState, this.room.sessionId, this.myRole);
     if (!view) return;
     this.lastView = view;
     for (const cb of this.stateCbs) cb(view);
@@ -126,6 +217,22 @@ export class ColyseusGameClient implements GameClient {
       this.emitEvent({ type: "left", code });
     };
     (room.onLeave as unknown as (cb: (code: number) => void) => void)(leaveCb);
+
+    // private role message
+    (room.onMessage as unknown as (type: string, cb: (payload: unknown) => void) => void)("role", (payload: unknown) => {
+      const p = payload as { role?: string };
+      if (p.role === "staff" || p.role === "saboteur") {
+        this.myRole = p.role as RoleType;
+        this.emitState();
+      }
+    });
+
+    // server error messages
+    (room.onMessage as unknown as (type: string, cb: (payload: unknown) => void) => void)("error", (payload: unknown) => {
+      const p = payload as { reason?: string; message?: string };
+      const reason = p.reason ?? p.message ?? "server-error";
+      this.emitEvent(mapServerError(reason));
+    });
 
     // emit initial state if already present
     try {
@@ -160,7 +267,7 @@ export class ColyseusGameClient implements GameClient {
       const room = await this.client.joinOrCreate<unknown>("hotel", { name: this.pendingName });
       this.wireRoom(room);
       // ensure initial emission after wire (state may arrive async, but also try now)
-      const view = toView((room as unknown as { state: unknown }).state, room.sessionId);
+      const view = toView((room as unknown as { state: unknown }).state, room.sessionId, this.myRole);
       if (view) {
         this.lastView = view;
         for (const cb of this.stateCbs) cb(view);
@@ -181,7 +288,7 @@ export class ColyseusGameClient implements GameClient {
     try {
       const room = await this.client.joinById<unknown>(filtered, { name: this.pendingName });
       this.wireRoom(room);
-      const view = toView((room as unknown as { state: unknown }).state, room.sessionId);
+      const view = toView((room as unknown as { state: unknown }).state, room.sessionId, this.myRole);
       if (view) {
         this.lastView = view;
         for (const cb of this.stateCbs) cb(view);
@@ -194,28 +301,44 @@ export class ColyseusGameClient implements GameClient {
   }
 
   sendMove(msg: MoveMsg): void {
-    if (!this.room) {
-      this.emitEvent({ type: "error", message: "not in room" });
-      return;
-    }
-    try {
-      this.room.send("move", msg);
-    } catch (e) {
-      const m = (e as { message?: string })?.message ?? String(e);
-      this.emitEvent({ type: "error", message: m });
-    }
+    this.ensureRoomSend("move", msg);
+  }
+
+  startRound(): void {
+    this.ensureRoomSend("startRound", {});
+  }
+
+  callElevator(shaft: ElevatorShaft): void {
+    this.ensureRoomSend("callElevator", { shaft });
+  }
+
+  rideElevator(shaft: ElevatorShaft, destFloor: number): void {
+    this.ensureRoomSend("rideElevator", { shaft, destFloor });
+  }
+
+  startChannel(type: ChannelType, roomId: string): void {
+    this.ensureRoomSend("channelStart", { type, roomId });
+  }
+
+  cancelChannel(): void {
+    this.ensureRoomSend("channelCancel", {});
   }
 
   advancePhase(): void {
+    // M0 legacy alias: host can still advance phase, but M1 uses startRound()
+    this.ensureRoomSend("advancePhase", {});
+  }
+
+  private ensureRoomSend(type: string, payload: unknown): void {
     if (!this.room) {
       this.emitEvent({ type: "error", message: "not in room" });
       return;
     }
     try {
-      this.room.send("advancePhase", {});
+      this.room.send(type, payload);
     } catch (e) {
       const m = (e as { message?: string })?.message ?? String(e);
-      this.emitEvent({ type: "error", message: m });
+      this.emitEvent({ type: "error", message: m, reason: m });
     }
   }
 
@@ -225,6 +348,14 @@ export class ColyseusGameClient implements GameClient {
     return () => {
       this.stateCbs.delete(cb);
     };
+  }
+
+  getLastView(): RoomStateView | null {
+    return this.lastView;
+  }
+
+  getCachedRole(): RoleType | null {
+    return this.myRole;
   }
 
   onEvent(cb: (e: ClientEvent) => void): Unsubscribe {

@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.gitignore
+.dev
+tooling/coverage
+coverage
+*.log
+.DS_Store
+apps/client/dist
+apps/server/dist
+packages/shared/dist
+tmp
+.env
+.env.local

@@ -1,15 +1,21 @@
-import { AVATAR_COLORS } from "@grandhotel/shared";
-import { clearChildren, createButton, createEl, createInput, createSwatch, qs } from "./dom.js";
+import { AVATAR_COLORS, getAllRoomIds } from "@grandhotel/shared";
+import { clearChildren, createButton, createEl, createInput, createSelect, createSwatch, qs } from "./dom.js";
 import { filterCodeInput } from "./reducer.js";
-import type { UIState } from "./reducer.js";
+import type { RoomStateView, UIState } from "./reducer.js";
 
 export interface UIHandlers {
   onSubmitName: (name: string) => void;
   onCreateRoom: () => void;
   onJoinRoom: (code: string) => void;
-  onAdvancePhase: () => void;
+  onStartRound: () => void;
+  onCallElevator: (shaft: "A" | "B") => void;
+  onRideElevator: (shaft: "A" | "B", destFloor: number) => void;
+  onStartChannel: (type: "prep" | "unprep" | "fake", roomId: string) => void;
+  onCancelChannel: () => void;
   onSetCodeInput: (code: string) => void;
   onDismissError?: () => void;
+  /** @deprecated M0 advancePhase handler; prefer onStartRound */
+  onAdvancePhase?: () => void;
 }
 
 function ensureContainers(overlay: HTMLElement): {
@@ -99,6 +105,134 @@ function renderMenuScreen(container: HTMLElement, state: UIState, handlers: UIHa
   }
 }
 
+function renderFloorIndicator(view: RoomStateView | null): HTMLElement {
+  const floor = view?.myFloor ?? 0;
+  const label = floor === 0 ? "LOBBY" : `${floor}F`;
+  return createEl("div", { id: "floor-indicator", className: "floor-indicator", text: `Floor: ${label}` });
+}
+
+function renderRoomStateList(roomsView: Record<string, string | null>): HTMLElement {
+  const list = createEl("ul", { id: "room-states", className: "room-states" });
+  for (const roomId of getAllRoomIds()) {
+    const state = roomsView[roomId];
+    const li = createEl("li");
+    const stateText = state === null ? "—" : state;
+    li.textContent = `${roomId}: ${stateText}`;
+    li.dataset.room = roomId;
+    list.append(li);
+  }
+  return list;
+}
+
+function renderElevatorControls(handlers: UIHandlers): HTMLElement {
+  const container = createEl("div", { id: "elevator-controls", className: "elevator-controls" });
+  for (const shaft of ["A", "B"] as const) {
+    const row = createEl("div", { className: "elevator-row" });
+    const callBtn = createButton(`Call ${shaft}`, () => handlers.onCallElevator(shaft), {
+      id: `call-elevator-${shaft}`,
+      className: "elevator-call-btn",
+    });
+    const floorOptions = [
+      { value: "0", label: "Lobby (0)" },
+      { value: "1", label: "1F" },
+      { value: "2", label: "2F" },
+      { value: "3", label: "3F" },
+    ];
+    const select = createSelect(floorOptions, { id: `ride-floor-${shaft}`, value: "1" });
+    const rideBtn = createButton(`Ride ${shaft}`, () => {
+      handlers.onRideElevator(shaft, Number.parseInt(select.value, 10));
+    }, { id: `ride-elevator-${shaft}`, className: "elevator-ride-btn" });
+    row.append(createEl("span", { text: `Shaft ${shaft}: ` }), callBtn, select, rideBtn);
+    container.append(row);
+  }
+  return container;
+}
+
+function renderChannelControls(state: UIState, handlers: UIHandlers): HTMLElement {
+  if (state.screen !== "inRoom") return createEl("div");
+  const view = state.view;
+  const container = createEl("div", { id: "channel-controls", className: "channel-controls" });
+  const ME = view?.mySessionId ?? "";
+  const me = view?.players.find((p) => p.id === ME);
+  const roomId = view?.roomsView ? findInsideRoom(view.roomsView) : null;
+
+  if (!roomId || !me) {
+    container.textContent = "Stand in a room to prep or sabotage.";
+    return container;
+  }
+
+  const isSaboteur = view?.myRole === "saboteur";
+  const roomState = view?.roomsView[roomId];
+
+  const row = createEl("div", { className: "channel-row" });
+  // Staff/saboteur real prep
+  const prepBtn = createEl("button", {
+    id: "channel-prep-btn",
+    className: "channel-btn",
+    text: isSaboteur && roomState === "prepped" ? "Hold to sabotage (E)" : "Hold to prep (E)",
+  });
+  prepBtn.addEventListener("mousedown", () => handlers.onStartChannel(isSaboteur ? "unprep" : "prep", roomId));
+  prepBtn.addEventListener("mouseup", () => handlers.onCancelChannel());
+  prepBtn.addEventListener("mouseleave", () => handlers.onCancelChannel());
+  prepBtn.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    handlers.onStartChannel(isSaboteur ? "unprep" : "prep", roomId);
+  });
+  prepBtn.addEventListener("touchend", () => handlers.onCancelChannel());
+  row.append(prepBtn);
+
+  // Saboteur fake prep
+  if (isSaboteur) {
+    const fakeBtn = createEl("button", {
+      id: "channel-fake-btn",
+      className: "channel-btn channel-fake",
+      text: "Hold fake prep (Shift+E)",
+    });
+    fakeBtn.addEventListener("mousedown", () => handlers.onStartChannel("fake", roomId));
+    fakeBtn.addEventListener("mouseup", () => handlers.onCancelChannel());
+    fakeBtn.addEventListener("mouseleave", () => handlers.onCancelChannel());
+    fakeBtn.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      handlers.onStartChannel("fake", roomId);
+    });
+    fakeBtn.addEventListener("touchend", () => handlers.onCancelChannel());
+    row.append(fakeBtn);
+  }
+
+  container.append(row);
+  return container;
+}
+
+function findInsideRoom(roomsView: Record<string, string | null>): string | null {
+  for (const [roomId, state] of Object.entries(roomsView)) {
+    if (state !== null) return roomId;
+  }
+  return null;
+}
+
+function renderResultsBanner(view: RoomStateView | null): HTMLElement | null {
+  if (!view || view.phase !== "results") return null;
+  const banner = createEl("div", { id: "results-banner", className: "results-banner" });
+  const winner = view.winner;
+  const title = createEl("h1", {
+    className: "results-title",
+    text: winner === "staff" ? "STAFF WIN" : winner === "saboteur" ? "SABOTEUR WIN" : "ROUND OVER",
+  });
+  if (winner === "staff") title.classList.add("staff-win");
+  if (winner === "saboteur") title.classList.add("saboteur-win");
+
+  const reveal = view.traitorReveal;
+  const traitorLine = createEl("div", {
+    className: "results-traitor",
+    text: reveal
+      ? `Saboteur: ${reveal.name} (${reveal.sessionId.slice(0, 6)})`
+      : "Saboteur reveal unavailable",
+  });
+
+  banner.append(title, traitorLine);
+  return banner;
+}
+
 function renderRoomScreen(container: HTMLElement, state: UIState, handlers: UIHandlers): void {
   if (state.screen !== "inRoom") return;
   clearChildren(container);
@@ -117,7 +251,7 @@ function renderRoomScreen(container: HTMLElement, state: UIState, handlers: UIHa
     roster.append(li);
   }
 
-  container.append(header, phaseLabel, roster);
+  container.append(header, phaseLabel, roster, renderFloorIndicator(state.view));
 
   // code display also
   const codeDisplay = createEl("div", { id: "room-code", text: `Code: ${state.code}` });
@@ -128,15 +262,40 @@ function renderRoomScreen(container: HTMLElement, state: UIState, handlers: UIHa
   const isHost = !!state.view && state.view.mySessionId === state.view.hostSessionId;
   if (isHost) {
     const phase = state.view?.phase ?? "waiting";
-    let label: string | null = null;
-    if (phase === "waiting") label = "Start round";
-    else if (phase === "playing") label = "Show results";
-    // results: no button per spec (could hide)
-    if (label) {
-      const hostBtn = createButton(label, () => handlers.onAdvancePhase(), { id: "host-advance-btn" });
+    if (phase === "waiting") {
+      const playerCount = state.view?.players.length ?? 0;
+      const canStart = playerCount >= 4;
+      const hostBtn = createButton("Start round", () => handlers.onStartRound(), {
+        id: "host-start-btn",
+        disabled: !canStart,
+      });
+      if (!canStart) hostBtn.title = "Need at least 4 players";
       container.append(hostBtn);
+      const countHint = createEl("div", {
+        id: "player-count-hint",
+        text: `${playerCount} player${playerCount === 1 ? "" : "s"} (need 4 to start)`,
+      });
+      countHint.style.fontSize = "12px";
+      container.append(countHint);
+    } else if (phase === "playing") {
+      // no host mid-round controls in M1
     }
   }
+
+  // Results overlay v1: winner banner + traitor reveal only; no recap timeline
+  const banner = renderResultsBanner(state.view);
+  if (banner) {
+    const overlay = createEl("div", { id: "results-overlay", className: "results-overlay" });
+    overlay.append(banner);
+    container.append(overlay);
+  }
+
+  container.append(renderElevatorControls(handlers));
+
+  const roomStates = renderRoomStateList(state.view?.roomsView ?? {});
+  container.append(roomStates);
+
+  container.append(renderChannelControls(state, handlers));
 
   if (state.error) {
     const err = createEl("div", { id: "room-error", className: "error", text: state.error });
@@ -222,6 +381,21 @@ export function mountUI(
       } catch {
         // surfaced via onEvent
       }
+    },
+    onStartRound: () => {
+      client.startRound();
+    },
+    onCallElevator: (shaft: "A" | "B") => {
+      client.callElevator(shaft);
+    },
+    onRideElevator: (shaft: "A" | "B", destFloor: number) => {
+      client.rideElevator(shaft, destFloor);
+    },
+    onStartChannel: (type: "prep" | "unprep" | "fake", roomId: string) => {
+      client.startChannel(type, roomId);
+    },
+    onCancelChannel: () => {
+      client.cancelChannel();
     },
     onAdvancePhase: () => {
       client.advancePhase();
