@@ -1,0 +1,20 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #2b2b2b; color: #eee; }
+#app { width: 960px; height: 240px; background: #bbb; position: relative; margin: 0 auto; border: 2px solid #888; overflow: hidden; }
+#overlay { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 960px; pointer-events: none; z-index: 10; }
+#overlay .screen { pointer-events: auto; background: rgba(245,245,245,0.96); color: #111; padding: 12px 16px; margin: 8px; border: 1px solid #999; border-radius: 4px; }
+#overlay h2, #overlay h3 { margin: 6px 0; }
+#overlay button { padding: 6px 10px; margin: 4px; cursor: pointer; border: 1px solid #666; background: #e8e8e8; border-radius: 3px; }
+#overlay button:disabled { opacity: 0.5; cursor: default; }
+#overlay button:hover:not(:disabled) { background: #ddd; }
+#overlay input { padding: 6px; margin: 4px; border: 1px solid #888; border-radius: 3px; }
+#overlay input:focus { outline: 2px solid #4a90e2; }
+#overlay .roster { list-style: none; padding: 0; margin: 8px 0; display: flex; gap: 8px; flex-wrap: wrap; }
+#overlay .roster li { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: #e0e0e0; border: 1px solid #aaa; border-radius: 3px; }
+#overlay .swatch { width: 12px; height: 12px; display: inline-block; border: 1px solid #333; vertical-align: middle; }
+#overlay #phase-label { font-weight: 700; margin: 8px 0; }
+#overlay #roster { min-height: 24px; }
+#overlay #error, #overlay #toast { color: #b00020; margin: 6px 8px; min-height: 1em; font-size: 13px; }
+#overlay .error { color: #b00020; margin: 6px 0; font-size: 13px; }
+#overlay #room-code { font-family: monospace; letter-spacing: 0.1em; margin: 6px 0; }
+.hidden { display: none !important; }
