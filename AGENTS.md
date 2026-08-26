@@ -68,6 +68,26 @@ Single container, server + static client same origin, Fly.io via `fly.toml`.
 the resulting `PUBLIC_URL` must be recorded in `STATE.md` Decisions and `deploy/README.md`
 before V-8 (live smoke) and V-9b (two-browser) can run.
 
+## Context7 / library docs
+
+`opencode.json` registers the Context7 MCP server (`context7`). Use it for every
+question about third-party APIs in this monorepo — especially **Colyseus
+(`0.15.x`), Phaser (`3.80.x`), Zod, Express, Vite, Vitest, TypeScript, and
+`@colyseus/schema`** — instead of relying on training data.
+
+How to use it:
+
+- **Include `use context7` in the prompt** when asking for implementation details,
+  migration help, or API examples. Good: `“How do I filter room state callbacks in
+  Colyseus? use context7.”`
+- **Or invoke the tools directly** when you are unsure of an API:
+  1. `context7_resolve-library-id` with the package name (e.g., `colyseus`).
+  2. `context7_query-docs` with the resolved ID and a focused topic.
+- **Be specific about the installed version.** The monorepo pins exact versions in
+  `package.json`; ask for docs matching those versions rather than “latest”.
+- **Do not use Context7** for project-specific rules (PRD, architecture, state
+  machine) — those are already in `prd.md`, `techstack.md`, and this file.
+
 ## Environment quirks
 
 - `.npmrc` sets `shamefully-hoist=false` → strict module isolation; do not rely on
