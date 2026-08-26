@@ -1,6 +1,6 @@
 * { box-sizing: border-box; }
 body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #2b2b2b; color: #eee; }
-#app { width: 960px; height: 240px; background: #bbb; position: relative; margin: 0 auto; border: 2px solid #888; overflow: hidden; }
+#app { width: 960px; height: 540px; background: #bbb; position: relative; margin: 0 auto; border: 2px solid #888; overflow: hidden; }
 #overlay { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 960px; pointer-events: none; z-index: 10; }
 #overlay .screen { pointer-events: auto; background: rgba(245,245,245,0.96); color: #111; padding: 12px 16px; margin: 8px; border: 1px solid #999; border-radius: 4px; }
 #overlay h2, #overlay h3 { margin: 6px 0; }

@@ -4,12 +4,7 @@ import type { UIAction, UIState } from "./ui/reducer.js";
 import { filterCodeInput, initialState, uiReducer } from "./ui/reducer.js";
 import { renderOverlay } from "./ui/screens.js";
 import { Interpolator } from "./movement/interpolate.js";
-import {
-  CLIENT_INPUT_SEND_HZ,
-  PLAYER_SPEED_PX_S,
-  PREP_TIME_MS,
-  UNPREP_TIME_MS,
-} from "@grandhotel/shared";
+import { CHANNEL_DURATIONS, CLIENT_INPUT_SEND_HZ, PLAYER_SPEED_PX_S } from "@grandhotel/shared";
 import type { HallScene as HallSceneType } from "./game/HallScene.js";
 
 let uiState: UIState = initialState;
@@ -94,12 +89,12 @@ async function ensureGameStarted(view: RoomStateView): Promise<void> {
       if (!resultsFrozen) client.callElevator(shaft);
     });
 
-    // Phaser will mount canvas into #app
+    // Phaser will mount canvas into #app (960×540 fits lobby + 3 guest floors)
     game = new Phaser.Game({
       type: Phaser.AUTO,
       parent: "app",
       width: 960,
-      height: 240,
+      height: 540,
       backgroundColor: "#bbbbbb",
       pixelArt: true,
       scene: sceneInstance as unknown as Phaser.Scene,
@@ -160,7 +155,7 @@ function clearChannelActive(): void {
 }
 
 function channelDuration(type: ActiveChannel["type"]): number {
-  return type === "unprep" ? UNPREP_TIME_MS : PREP_TIME_MS;
+  return CHANNEL_DURATIONS[type];
 }
 
 function updateChannelBar(now: number): void {
@@ -263,10 +258,13 @@ function dispatch(action: UIAction): void {
   // Side-effects driven by InRoom view
   if (next.screen === "inRoom" && next.view) {
     resultsFrozen = next.view.phase === "results";
+    if (resultsFrozen) clearChannelActive();
     void ensureGameStarted(next.view);
     syncLocalState(next.view);
     syncRoster(next.view);
     updateHud(next.view);
+  } else {
+    resultsFrozen = false;
   }
 }
 
@@ -320,6 +318,10 @@ const handlers = {
   },
   onStartChannel: (type: "prep" | "unprep" | "fake", roomId: string): void => {
     if (resultsFrozen) return;
+    // Mirror the keyboard hold path so the on-screen buttons also drive the
+    // shared progress-bar overlay (real prep / fake prep / unprep).
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    channelActive = { roomId, type, startAt: now };
     client.startChannel(type, roomId);
   },
   onCancelChannel: (): void => {
@@ -416,8 +418,6 @@ function boot(): string {
   const overlay = getOverlay();
   if (overlay) {
     ensureHudElements(overlay);
-    // Keep import.meta.env.VITE_GAME_URL wiring intact — ColyseusGameClient reads it internally
-    void import.meta;
     rerender();
   }
   setupInputListeners();
@@ -458,5 +458,3 @@ if (typeof window !== "undefined") {
     }
   });
 }
-
-console.log("boot");
