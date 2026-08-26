@@ -45,7 +45,6 @@ secrets.json
 .DS_Store
 Thumbs.db
 desktop.ini
-.vscode/
 .idea/
 *.sublime-*
 

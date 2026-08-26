@@ -44,6 +44,5 @@
         "pnpm.enable": true
       }
     }
-  },
-  "remoteUser": "node"
+  }
 }
