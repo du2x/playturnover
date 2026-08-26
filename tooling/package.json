@@ -1,0 +1,30 @@
+{
+  "name": "@grandhotel/tooling",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run test src/harness/helpers.spec.ts --testTimeout=5000",
+    "test:integration": "vitest run src/integration --testTimeout=20000",
+    "smoke:local": "tsx src/smoke.ts --url http://localhost:2567",
+    "smoke:remote": "tsx src/smoke.ts",
+    "verify:m0": "echo 'verify:m0 not implemented in M0.1.1'"
+  },
+  "dependencies": {
+    "@colyseus/schema": "^2.0.37",
+    "@grandhotel/server": "workspace:*",
+    "@grandhotel/shared": "workspace:*",
+    "colyseus": "^0.15.57",
+    "colyseus.js": "^0.15.26",
+    "express": "^4.19.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.4",
+    "vitest": "^1.6.0"
+  }
+}
