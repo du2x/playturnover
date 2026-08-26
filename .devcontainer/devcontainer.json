@@ -1,0 +1,49 @@
+{
+  "name": "Grand Hotel (turnover)",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:20",
+  "features": {
+    "ghcr.io/devcontainers/features/pnpm:1": {
+      "version": "9.15.9"
+    },
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+  "containerEnv": {
+    "PNPM_HOME": "/usr/local/share/pnpm",
+    "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"
+  },
+  "postCreateCommand": "corepack enable && pnpm install --frozen-lockfile || pnpm install",
+  "forwardPorts": [
+    2567,
+    5173,
+    8080
+  ],
+  "portsAttributes": {
+    "2567": {
+      "label": "Colyseus WebSocket server"
+    },
+    "5173": {
+      "label": "Vite client dev server"
+    },
+    "8080": {
+      "label": "Single-origin deploy (server + static client)"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.vscode-typescript-next",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss",
+        "ms-playwright.playwright",
+        "vitest.explorer"
+      ],
+      "settings": {
+        "typescript.preferences.importModuleSpecifier": "relative",
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "pnpm.enable": true
+      }
+    }
+  },
+  "remoteUser": "node"
+}

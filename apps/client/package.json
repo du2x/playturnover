@@ -1,0 +1,24 @@
+{
+  "name": "@grandhotel/client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "test": "vitest run",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "@grandhotel/shared": "workspace:*",
+    "colyseus.js": "^0.15.26",
+    "phaser": "^3.80.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "jsdom": "^24.1.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.8",
+    "vitest": "^1.6.0"
+  }
+}

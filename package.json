@@ -1,0 +1,18 @@
+{
+  "name": "turnover",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "dev:server": "pnpm --filter @grandhotel/server dev",
+    "dev:client": "pnpm --filter @grandhotel/client dev",
+    "smoke:local": "pnpm --filter @grandhotel/tooling smoke:local",
+    "smoke:remote": "pnpm --filter @grandhotel/tooling smoke:remote",
+    "verify:m0": "pnpm --filter @grandhotel/tooling verify:m0"
+  }
+}
