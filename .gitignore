@@ -1,10 +1,60 @@
+# ─────────────────────────────────────────────────────────────
+# Turnover / Grand Hotel — monorepo .gitignore
+# pnpm workspaces · Vite client · Colyseus server · Vitest
+# ─────────────────────────────────────────────────────────────
+
+# ---- Dependencies (pnpm) ----
 node_modules
+.pnpm-store/
+.pnpm-debug.log*
+
+# ---- Build / compile output ----
 dist
-.pnpm-store
-coverage
-.turbo
+dist-ssr
+build
+*.tsbuildinfo
+*.tsbuildinfo.*
 .vite
-.env
-.env.local
+.turbo
+*.swp
+
+# ---- Server (Colyseus / tsx) ----
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---- Test / coverage (Vitest) ----
+coverage
+.nyc_output
+*.tap
+test-results/
+
+# ---- Environment / secrets ----
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.p12
+*.crt
+secrets.json
+
+# ---- OS / editor ----
 .DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.sublime-*
+
+# ---- Local tooling / misc ----
+tmp/
+.tmp/
+.cache/
+*.tgz
+*.tar.gz
+
+# ---- Fly.io deploy artifacts (keep fly.toml + deploy/ committed) ----
+.fly/
