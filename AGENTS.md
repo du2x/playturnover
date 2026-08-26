@@ -1,61 +1,76 @@
 # AGENTS.md — Turnover (prototype, codename "Grand Hotel")
 
-Product docs: `prd.md` (requirements) · `roadmap.md` (milestones M0–M3) ·
-`techstack.md` (stack law). Progress lives in `STATE.md` — read it before doing anything.
+Browser-based social-deduction game (5-min rounds, hidden saboteur). TypeScript
+monorepo: Phaser 3 client + Colyseus authoritative server + shared package, deployed
+as one container. **Built via an agentic pipeline — see [`AGENTIC-WORKFLOW.md`](./AGENTIC-WORKFLOW.md)**
+(`opencode.json` sets the orchestrator as the default agent). This file is the
+technical ramp-up; it does not describe the pipeline.
 
-This repo is developed through an **agentic pipeline**: one orchestrator coordinates four
-specialist subagents per milestone. Humans talk to the orchestrator; the orchestrator talks
-to everyone else.
+## Read these first (in this order)
 
-## Agents
+- `STATE.md` — source of truth for progress. Read it on every session start.
+- `prd.md` — requirements + §7 tuning values (the only place numbers are defined).
+- `roadmap.md` — milestones M0–M3, each with an exit criterion.
+- `techstack.md` — architectural law; the rules below are non-negotiable.
 
-| Agent | Definition | Mode | Reads | Writes |
-|---|---|---|---|---|
-| **orchestrator** | `.opencode/agent/orchestrator.md` | primary | everything | `STATE.md` only |
-| **spec-creator** | `.opencode/agent/spec-creator.md` | subagent | prd / roadmap / techstack / code | `.dev/specs/<M#>-spec.md` |
-| **planner** | `.opencode/agent/planner.md` | subagent | spec / code | `.dev/plans/<M#>-plan.md` |
-| **builder** | `.opencode/agent/builder.md` | subagent | task / spec / plan / code | product code only |
-| **verifier** | `.opencode/agent/verifier.md` | subagent, edit denied | spec / plan / code | `.dev/reports/<M#>-verification.md` |
+## Monorepo & commands
 
-## Pipeline (per milestone)
+pnpm workspaces (`pnpm-workspace.yaml`: `apps/*`, `packages/*`, `tooling`).
+`deploy/` is config only — not a workspace.
 
-```
-                    ┌─────────────────────────────────────────────┐
-                    │                 ORCHESTRATOR                │
-                    │        owns STATE.md · spawns everyone      │
-                    └─────────────────────────────────────────────┘
-  1 SPEC    ──► spec-creator   ⇒ .dev/specs/<M#>-spec.md       WHAT + how to verify
-  2 PLAN    ──► planner        ⇒ .dev/plans/<M#>-plan.md       atomic tasks → stages →
-                                                                parallel groups + deps
-  3 BUILD   ──► builder ×N     ⇒ product code                  stage order respected;
-                   ▲                                            parallel groups run as
-                   └─ 1 retry w/ failure report                 concurrent builders
-  4 VERIFY  ──► verifier       ⇒ .dev/reports/<M#>-verification.md
-      │ PASS ⇒ milestone done in STATE.md → next milestone
-      └ FAIL ⇒ failed items back to builders (step 3) → re-verify
-               2 failed loops ⇒ status blocked, escalate to human
-```
+| Workspace | Name | Role |
+|---|---|---|
+| `packages/shared` | `@grandhotel/shared` | **Single source of truth** for PRD §7 tuning constants, Colyseus schemas, Zod message schemas |
+| `apps/server` | `@grandhotel/server` | Node + Colyseus authoritative room logic (dev port 2567, `tsx watch`) |
+| `apps/client` | `@grandhotel/client` | Vite + Phaser 3 client (dev port 5173) |
+| `tooling` | `@grandhotel/tooling` | Integration harness, smoke script, per-milestone `verify:m0` gate |
 
-The orchestrator updates `STATE.md` after every phase transition
-(`pending → specifying → planning → building → verifying → done | blocked`),
-appending a dated log line per event and recording blockers verbatim.
+Root scripts (the canonical entrypoints):
+- `pnpm install` — if pnpm missing: `corepack enable` (it's pinned via `packageManager`).
+- `pnpm typecheck` / `pnpm build` / `pnpm test` → recurse every workspace (`pnpm -r`).
+- `pnpm dev:server` / `pnpm dev:client` — run one side locally.
+- `pnpm smoke:local` / `pnpm smoke:remote` — two-client transport smoke check.
+- `pnpm verify:m0` — M0 final gate (chains install→typecheck→build→test→smoke→docker).
+- Per-package: `pnpm --filter @grandhotel/<client|server|shared|tooling> <script>`.
 
-## Rules
+## Architecture constraints an agent would miss
 
-1. Write access is role-scoped: only the orchestrator writes `STATE.md`; specs come only
-   from spec-creator; plans only from planner; builders touch product code; the verifier
-   edits nothing (by permission, not by promise).
-2. Specs are verification-first: every requirement carries an executable or concretely
-   checkable criterion (`V-n`). No criterion, no requirement.
-3. Plans are atomic: one task = one reviewable unit with its own verify step.
-   Independent tasks in a stage are file-disjoint and get spawned as concurrent builders.
-4. Nothing counts as done without a verifier PASS against the spec's criteria.
-5. On session start: read `STATE.md` first and resume from recorded state — never redo
-   completed phases.
+- **Server-authoritative.** All rule-bearing state (roles, room states, channels,
+  timers, elevators, accusations) lives server-side in Colyseus Schema. The only
+  documented exception: avatar *positions* are client-reported presence, sanity-clamped
+  server-side. Never put game rules in the client.
+- **No physics engine.** Phaser Arcade Physics stays **disabled**. Movement is
+  `clamp(x, bounds)` + discrete elevator teleports; pass-through bodies. Distance checks
+  are `|dx|` on the same floor. Do not add collision bodies.
+- **`tsconfig.base.json` is strict about imports:** `verbatimModuleSyntax: true` and
+  `isolatedModules: true` → use `import type` / `export type` for all type-only imports
+  or it will not compile.
+- **Tuning constants live only in `@grandhotel/shared`** (`src/constants.ts`, sourced
+  from PRD §7). Import them (e.g. `MAX_PLAYERS`) — never hardcode literals. The M0 verify
+  step greps for stray `6` in the cap context; keep the shared constant as the only source.
+- **Client transport is behind the `GameClient` interface** (escape hatch, techstack §7).
+  Gameplay/UI must not import Colyseus types directly — use the `RoomStateView`
+  projection. Client endpoint comes from `import.meta.env.VITE_GAME_URL` (defaults to
+  same origin) — keep that wiring for the single-origin deploy.
 
-## Running it
+## Testing
 
-- Start opencode in this repo; the orchestrator is the default agent.
-- Say `run M0` / `continue`, or name a milestone. Track progress in `STATE.md`.
-- Artifacts accumulate under `.dev/{specs,plans,reports}/` — commit them alongside code;
-  they are the audit trail of how every feature came to be.
+Vitest (`vitest run`). Server tests use Colyseus test utilities / direct `Room`
+simulation. Tooling integration tests spawn a real server on an ephemeral port and
+connect two `colyseus.js` clients — **no browser required** for automated checks.
+`pnpm verify:m0` (or the milestone's `verify:mx`) is the gate; a few V-criteria stay
+manual (visual/two-browser) and are marked SKIP-MANUAL.
+
+## Deploy (operator step, not a builder task)
+
+Single container, server + static client same origin, Fly.io via `fly.toml`.
+`fly launch --no-deploy` then `fly deploy`. Requires a human-provisioned Fly account;
+the resulting `PUBLIC_URL` must be recorded in `STATE.md` Decisions and `deploy/README.md`
+before V-8 (live smoke) and V-9b (two-browser) can run.
+
+## Environment quirks
+
+- `.npmrc` sets `shamefully-hoist=false` → strict module isolation; do not rely on
+  hoisted transitive deps.
+- Node `>=18` (engines); devcontainer image is Node 20 with pnpm 9.15.9.
+- Devcontainer forwards ports: 2567 (Colyseus WS), 5173 (Vite), 8080 (container deploy).
