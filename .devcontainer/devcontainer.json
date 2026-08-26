@@ -11,7 +11,7 @@
     "PNPM_HOME": "/usr/local/share/pnpm",
     "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"
   },
-  "postCreateCommand": "corepack enable && pnpm install --frozen-lockfile || pnpm install",
+  "postCreateCommand": "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi",
   "forwardPorts": [
     2567,
     5173,
