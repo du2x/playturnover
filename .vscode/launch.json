@@ -1,0 +1,34 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Server: dev",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "pnpm dev:server",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "NODE_ENV": "development"
+      }
+    },
+    {
+      "name": "Client: dev",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "pnpm dev:client",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "NODE_ENV": "development"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Start app (server + client)",
+      "configurations": [
+        "Server: dev",
+        "Client: dev"
+      ]
+    }
+  ]
+}
