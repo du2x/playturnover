@@ -10,11 +10,11 @@ Status legend: `pending · specifying · planning · building · verifying · do
 | ID | Title | Status | Phase | Spec | Plan | Verification |
 |----|---------------------|--------|-------|------|------|--------------|
 | M0 | Walking skeleton | done | done | .dev/specs/M0-spec.md | .dev/plans/M0-plan.md | .dev/reports/M0-verification.md |
-| M1 | Full round loop | verifying | VERIFY | .dev/specs/M1-spec.md | .dev/plans/M1-plan.md | .dev/reports/M1-verification.md (pending) |
+| M1 | Full round loop | done | done | .dev/specs/M1-spec.md | .dev/plans/M1-plan.md | .dev/reports/M1-verification.md |
 | M2 | Evidence layer | pending | — | — | — | — |
 | M3 | Justice + recap | pending | — | — | — | — |
 
-**Next up:** M1 VERIFY — spawn `verifier` to execute V-1…V-15 independently; verdict PASS → run `scripts/validate-state.py M1` → M1 done.
+**Next up:** M2 SPEC (pending user go-ahead) — spawn `spec-creator`; carry over V-2 selector fix (spec/plan `-t "horizontal clamp"`/`"position clamp"` are vacuous) and the operator-pending `PUBLIC_URL` (needed for live two-browser V-9b, not blocking).
 **User action pending:** `fly deploy` app `turnover-grandhotel` → record `PUBLIC_URL` in STATE.md Decisions + deploy/README.md to enable `smoke:remote` + two-browser V-9b (M0 carry-over, not blocking M1).
 
 ## Blockers
@@ -32,6 +32,10 @@ Status legend: `pending · specifying · planning · building · verifying · do
 | 2026-08-26 | Operator pending: PUBLIC_URL not yet set — requires `fly deploy` of turnover-grandhotel then update STATE.md + deploy/README.md for live V-8/V-9b. |
 | 2026-08-26 | TLC-spec-driven graft (Option A): installed `.opencode/skills/tlc-spec-driven` (SKILL.md + 5 scripts, CC-BY-4.0), adapted 4 gates to Turnover shape: `scripts/validate-spec.py`, `scripts/validate-plan.py`, `scripts/validate-state.py`, `scripts/check-commit.py`; wired into spec-creator/planner/verifier/builder + orchestrator gates; `package.json` scripts `validate:*` + `check:commit`; git `commit-msg` hook enforcing Conventional Commits; `verify:m0` now → `bash scripts/verify-m0.sh`. |
 | 2026-08-26 | **HOTFIX-RECOVER** (post-reset): `git reset --hard HEAD~1` during first M1.6.1 spawn dropped `2683e9f` and reverted uncommitted files. Recovered from `ec32b33` (stash: shared pkg entry points + barrel + tsconfig + server index), dangling blob `ce67cd3` (M1.5.1 HotelRoom 700 lines), `2683e9f` (client M1.4.2+M1.5.2 files), blob `f5ec3e03` (dom.ts with createSelect); staged M1.6.1 WIP preserved. `pnpm -r typecheck` + `pnpm -r test` green again. Rule: no `git reset --hard` / `git amend` in this repo without orchestrator go-ahead. |
+| 2026-08-26 | M1 | Parallel-session commits reconciled: `d25c908` (GameClient transport contract M1.4.2), `34f0d1b` (HotelRoom/elevator + remove roomCode; added MIN_PLAYERS/MAX_NAME_LENGTH/MAX_MOVE_DT_S constants; constants.spec reworked), `c50fc2c` (Docker dist flatten), `ddfc234` (STATE.md committed as-is incl. my edits), `38e81a4` + `67cbdb9` (post-verify refactors: drop dom shims, fix elevator defects, remove advancePhase bypass, gate round actions to playing). All landed under repo author identity; reconciled and verified below. |
+| 2026-08-26 | M1 | VERIFY PASS (verifier, `.dev/reports/M1-verification.md`): V-1…V-15 all PASS, 0 FAIL; V-8 visual glance SKIP-MANUAL (30 s, justified); live two-browser/PUBLIC_URL operator-pending non-blocking. Aggregate `bash scripts/verify-m1.sh` green. **Finding (non-blocking):** V-2 spec/plan selectors `-t "horizontal clamp"` / `-t "position clamp"` match 0 tests (vacuous) — substance verified under real test names (client 24/24, server 7/7); fix wording in M2 spec/plan. |
+| 2026-08-26 | M1 | Post-verify refactors re-gated at HEAD `67cbdb9`: `bash scripts/verify-m1.sh` re-run after `38e81a4`+`67cbdb9` — ALL REQUIRED CHECKS PASS, `m1 full round loop: PASS` (Docker single-origin + smoke green). Closing gate `python3 scripts/validate-state.py M1` exit 0. M1 done. |
+| 2026-08-26 | M1 | Close-out committed (local): `scripts/verify-m1.sh`, root `verify:m1` forwarder, `.dev/reports/M1-verification.md`, STATE.md done-transition. No push (blast-radius). |
 
 ## Log
 
@@ -69,3 +73,4 @@ Status legend: `pending · specifying · planning · building · verifying · do
 | 2026-08-26 | M1 | BUILD S6 → M1.6.1 PASS (composition root finalized: canvas 960×540, channel bar via CHANNEL_DURATIONS, results freeze; client 51/51 + build green) + M1.6.2 PASS (8 new integration suites, 13 tests; M0 regression green) → S7 queued. M1.6.2 flagged a real server defect: elevator arrival could stall under real clients (clock fires ~1 tick before Date.now) — fixed in b1f5cd9 by re-arming remaining delay; server 87/87 regression green. |
 | 2026-08-26 | — | TLC gates installed (Option A): `validate-spec 0 warnings` on M0+M1, `validate-plan` M0 0/0, M1 0/9 (R-21 soft), `validate-state M0` PASS (prose evidence allowed), `check-commit` OK — ready for M1 VERIFY close |
 | 2026-08-26 | M1 | BUILD S7 done → M1.7.1 PASS (user-approved review): `scripts/verify-m1.sh` executable (chain: install→typecheck/build→shared/server/client tests→tooling integration→literal sweep→Docker single-origin→smoke:local), root `verify:m1` forwarder wired, Dockerfile dist flatten fix for single-origin static serving, `onDispose` teardown cleanup (listing stub in onCreate + colyseus-compat type). BUILD done → Status `building:BUILD → verifying:VERIFY`; verifier spawned. |
+| 2026-08-26 | M1 | VERIFY done → PASS (V-1…V-15, 0 FAIL; V-8 visual glance SKIP-MANUAL; .dev/reports/M1-verification.md written). Post-verify refactors (`38e81a4`,`67cbdb9`) re-gated: `bash scripts/verify-m1.sh` ALL REQUIRED CHECKS PASS at HEAD `67cbdb9`; `validate-state M1` exit 0 → M1 done. |

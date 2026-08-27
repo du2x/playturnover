@@ -14,6 +14,7 @@
     "smoke:local": "pnpm --filter @grandhotel/tooling smoke:local",
     "smoke:remote": "pnpm --filter @grandhotel/tooling smoke:remote",
     "verify:m0": "bash scripts/verify-m0.sh",
+    "verify:m1": "bash scripts/verify-m1.sh",
     "validate:spec": "python3 scripts/validate-spec.py",
     "validate:plan": "python3 scripts/validate-plan.py",
     "validate:state": "python3 scripts/validate-state.py",
