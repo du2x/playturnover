@@ -224,4 +224,14 @@ export class RoomState extends Schema {
   /** M3 — chronological server-authoritative round recap. */
   @type([RecapEvent])
   recapEvents = new ArraySchema<RecapEvent>();
+
+  // ── M4 extensions ─────────────────────────────────────────────────────────
+
+  /**
+   * M4 — server-assigned short code for matchmaking display. Presentation/
+   * session info, not rule-bearing. Defaults to "" so old decodes stay
+   * compatible before the server assigns it.
+   */
+  @type("string")
+  roomCode = "";
 }

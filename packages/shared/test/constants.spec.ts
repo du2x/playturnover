@@ -24,7 +24,16 @@ import {
   INTERP_DELAY_MS,
   AVATAR_COLORS,
   RESULTS_PLACEHOLDER,
+  STAGE_WIDTH_PX,
+  STAGE_HEIGHT_PX,
+  VIEWPORT_MIN_WIDTH_PX,
+  FLOOR_TINTS,
+  AVATAR_BODY_SIZE_PX,
+  AVATAR_LABEL_FONT_SIZE_PX,
+  HUD_NAME_MAX_CHARS,
+  FLOOR_COUNT,
 } from "../src/constants.js";
+import { RoomState } from "../src/state.js";
 
 describe("PRD §7 tuning constants (V-2)", () => {
   it("MAX_PLAYERS = 6", () => {
@@ -99,5 +108,33 @@ describe("PRD §7 tuning constants (V-2)", () => {
 
   it("results placeholder is null (no winner/traitor in M0)", () => {
     expect(RESULTS_PLACEHOLDER).toBeNull();
+  });
+});
+
+describe("m4 tuning constants (V-6/V-7)", () => {
+  it("stage and viewport free variables exist with plan values", () => {
+    expect(STAGE_WIDTH_PX).toBe(960);
+    expect(STAGE_HEIGHT_PX).toBe(540);
+    expect(VIEWPORT_MIN_WIDTH_PX).toBe(700);
+  });
+
+  it("floor tints — one per lobby + guest floor, all distinct hex colors", () => {
+    expect(FLOOR_TINTS.length).toBe(FLOOR_COUNT + 1);
+    const set = new Set(FLOOR_TINTS);
+    expect(set.size).toBe(FLOOR_TINTS.length);
+    for (const c of FLOOR_TINTS) {
+      expect(c).toMatch(/^#[0-9A-Fa-f]{6}$/);
+    }
+  });
+
+  it("avatar presentation free variables exist with plan values", () => {
+    expect(AVATAR_BODY_SIZE_PX).toBe(28);
+    expect(AVATAR_LABEL_FONT_SIZE_PX).toBe(14);
+    expect(HUD_NAME_MAX_CHARS).toBe(14);
+  });
+
+  it("RoomState default roomCode is empty string", () => {
+    const state = new RoomState();
+    expect(state.roomCode).toBe("");
   });
 });

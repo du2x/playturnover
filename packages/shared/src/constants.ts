@@ -133,3 +133,34 @@ export const ELEVATOR_B_X = 842;
 
 /** M1 free variable, see plan — elevator interact radius in pixels. */
 export const ELEVATOR_INTERACT_RADIUS = 18;
+
+// ── M4 free variables, see plan ────────────────────────────────────────────
+
+/** M4 free variable, see plan — design width for the Phaser canvas and DOM overlay. */
+export const STAGE_WIDTH_PX = 960;
+
+/** M4 free variable, see plan — design height for the Phaser canvas and DOM overlay. */
+export const STAGE_HEIGHT_PX = 540;
+
+/** M4 free variable, see plan — minimum viewport width below which layout compresses. */
+export const VIEWPORT_MIN_WIDTH_PX = 700;
+
+/**
+ * M4 free variable, see plan — per-floor hallway strip tints.
+ * Index 0 = lobby tint, index n = guest floor n (length FLOOR_COUNT + 1).
+ */
+export const FLOOR_TINTS = [
+  "#9A8C98",
+  "#C9ADA7",
+  "#B08968",
+  "#DDB892",
+] as const;
+
+/** M4 free variable, see plan — avatar body square size in pixels. */
+export const AVATAR_BODY_SIZE_PX = 28;
+
+/** M4 free variable, see plan — avatar label font size in pixels. */
+export const AVATAR_LABEL_FONT_SIZE_PX = 14;
+
+/** M4 free variable, see plan — roster chip display-name truncation length in characters. */
+export const HUD_NAME_MAX_CHARS = 14;
