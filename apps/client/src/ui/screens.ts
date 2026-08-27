@@ -1,5 +1,20 @@
-import { AVATAR_COLORS, MAX_NAME_LENGTH, ROOM_CODE_LENGTH, getAllRoomIds } from "@grandhotel/shared";
-import { clearChildren, createButton, createEl, createInput, createSelect, createSwatch, qs } from "./dom.js";
+import {
+  AVATAR_COLORS,
+  MAX_NAME_LENGTH,
+  ROOM_CODE_LENGTH,
+  ACCUSATION_RANGE_TILES,
+  TILE_SIZE_PX,
+  getAllRoomIds,
+} from "@grandhotel/shared";
+import {
+  clearChildren,
+  createButton,
+  createEl,
+  createInput,
+  createSelect,
+  createSwatch,
+  qs,
+} from "./dom.js";
 import { filterCodeInput } from "./reducer.js";
 import type { RoomStateView, UIState } from "./reducer.js";
 
@@ -10,6 +25,7 @@ export interface UIHandlers {
   onStartRound: () => void;
   onCallElevator: (shaft: "A" | "B") => void;
   onRideElevator: (shaft: "A" | "B", destFloor: number) => void;
+  onAccuse: (targetSessionId: string) => void;
   onStartChannel: (type: "prep" | "unprep" | "fake", roomId: string) => void;
   onCancelChannel: () => void;
   onSetCodeInput: (code: string) => void;
@@ -39,17 +55,33 @@ function ensureContainers(overlay: HTMLElement): {
     toastEl = createEl("div", { id: "toast" });
     overlay.append(toastEl);
   }
-  return { nameScreen: nameScreen!, menuScreen: menuScreen!, roomScreen: roomScreen!, toastEl: toastEl! };
+  return {
+    nameScreen: nameScreen!,
+    menuScreen: menuScreen!,
+    roomScreen: roomScreen!,
+    toastEl: toastEl!,
+  };
 }
 
-function renderNameScreen(container: HTMLElement, state: UIState, handlers: UIHandlers): void {
+function renderNameScreen(
+  container: HTMLElement,
+  state: UIState,
+  handlers: UIHandlers,
+): void {
   clearChildren(container);
   const title = createEl("h2", { text: "Enter your name" });
-  const input = createInput("Display name", { id: "name-input", value: "" }) as HTMLInputElement;
+  const input = createInput("Display name", {
+    id: "name-input",
+    value: "",
+  }) as HTMLInputElement;
   input.maxLength = MAX_NAME_LENGTH;
-  const submit = createButton("Continue", () => {
-    handlers.onSubmitName(input.value);
-  }, { id: "name-submit" });
+  const submit = createButton(
+    "Continue",
+    () => {
+      handlers.onSubmitName(input.value);
+    },
+    { id: "name-submit" },
+  );
 
   const onKey = (e: KeyboardEvent): void => {
     if (e.key === "Enter") handlers.onSubmitName(input.value);
@@ -58,20 +90,33 @@ function renderNameScreen(container: HTMLElement, state: UIState, handlers: UIHa
 
   container.append(title, input, submit);
   if (state.error) {
-    const err = createEl("div", { id: "name-error", className: "error", text: state.error });
+    const err = createEl("div", {
+      id: "name-error",
+      className: "error",
+      text: state.error,
+    });
     err.style.color = "#b00020";
     container.append(err);
   }
 }
 
-function renderMenuScreen(container: HTMLElement, state: UIState, handlers: UIHandlers): void {
+function renderMenuScreen(
+  container: HTMLElement,
+  state: UIState,
+  handlers: UIHandlers,
+): void {
   if (state.screen !== "named") return;
   clearChildren(container);
   const title = createEl("h2", { text: `Welcome, ${state.name}` });
-  const createBtn = createButton("Create room", () => handlers.onCreateRoom(), { id: "create-room-btn" });
+  const createBtn = createButton("Create room", () => handlers.onCreateRoom(), {
+    id: "create-room-btn",
+  });
 
   const joinHeader = createEl("h3", { text: "Join by code" });
-  const codeInput = createInput("CODE", { id: "code-input", value: state.codeInput }) as HTMLInputElement;
+  const codeInput = createInput("CODE", {
+    id: "code-input",
+    value: state.codeInput,
+  }) as HTMLInputElement;
   // uppercase filtered to shared alphabet
   codeInput.maxLength = ROOM_CODE_LENGTH;
   codeInput.style.textTransform = "uppercase";
@@ -84,10 +129,14 @@ function renderMenuScreen(container: HTMLElement, state: UIState, handlers: UIHa
   // initialize filtered display
   codeInput.value = filterCodeInput(state.codeInput);
 
-  const joinBtn = createButton("Join", () => handlers.onJoinRoom(codeInput.value), {
-    id: "join-btn",
-    disabled: codeInput.value.length !== ROOM_CODE_LENGTH,
-  });
+  const joinBtn = createButton(
+    "Join",
+    () => handlers.onJoinRoom(codeInput.value),
+    {
+      id: "join-btn",
+      disabled: codeInput.value.length !== ROOM_CODE_LENGTH,
+    },
+  );
 
   // enable/disable reacts to input — re-evaluate on input
   codeInput.addEventListener("input", () => {
@@ -97,7 +146,11 @@ function renderMenuScreen(container: HTMLElement, state: UIState, handlers: UIHa
   container.append(title, createBtn, joinHeader, codeInput, joinBtn);
 
   if (state.error) {
-    const err = createEl("div", { id: "menu-error", className: "error", text: state.error });
+    const err = createEl("div", {
+      id: "menu-error",
+      className: "error",
+      text: state.error,
+    });
     err.style.color = "#b00020";
     container.append(err);
   }
@@ -106,10 +159,16 @@ function renderMenuScreen(container: HTMLElement, state: UIState, handlers: UIHa
 function renderFloorIndicator(view: RoomStateView | null): HTMLElement {
   const floor = view?.myFloor ?? 0;
   const label = floor === 0 ? "LOBBY" : `${floor}F`;
-  return createEl("div", { id: "floor-indicator", className: "floor-indicator", text: `Floor: ${label}` });
+  return createEl("div", {
+    id: "floor-indicator",
+    className: "floor-indicator",
+    text: `Floor: ${label}`,
+  });
 }
 
-function renderRoomStateList(roomsView: Record<string, string | null>): HTMLElement {
+function renderRoomStateList(
+  roomsView: Record<string, string | null>,
+): HTMLElement {
   const list = createEl("ul", { id: "room-states", className: "room-states" });
   for (const roomId of getAllRoomIds()) {
     const state = roomsView[roomId];
@@ -122,34 +181,102 @@ function renderRoomStateList(roomsView: Record<string, string | null>): HTMLElem
   return list;
 }
 
-function renderElevatorControls(handlers: UIHandlers): HTMLElement {
-  const container = createEl("div", { id: "elevator-controls", className: "elevator-controls" });
+function renderElevatorControls(
+  handlers: UIHandlers,
+  view: RoomStateView | null,
+): HTMLElement {
+  const container = createEl("div", {
+    id: "elevator-controls",
+    className: "elevator-controls",
+  });
   for (const shaft of ["A", "B"] as const) {
     const row = createEl("div", { className: "elevator-row" });
-    const callBtn = createButton(`Call ${shaft}`, () => handlers.onCallElevator(shaft), {
-      id: `call-elevator-${shaft}`,
-      className: "elevator-call-btn",
-    });
+    const callBtn = createButton(
+      `Call ${shaft}`,
+      () => handlers.onCallElevator(shaft),
+      {
+        id: `call-elevator-${shaft}`,
+        className: "elevator-call-btn",
+      },
+    );
     const floorOptions = [
       { value: "0", label: "Lobby (0)" },
       { value: "1", label: "1F" },
       { value: "2", label: "2F" },
       { value: "3", label: "3F" },
     ];
-    const select = createSelect(floorOptions, { id: `ride-floor-${shaft}`, value: "1" });
-    const rideBtn = createButton(`Ride ${shaft}`, () => {
-      handlers.onRideElevator(shaft, Number.parseInt(select.value, 10));
-    }, { id: `ride-elevator-${shaft}`, className: "elevator-ride-btn" });
-    row.append(createEl("span", { text: `Shaft ${shaft}: ` }), callBtn, select, rideBtn);
+    const select = createSelect(floorOptions, {
+      id: `ride-floor-${shaft}`,
+      value: "1",
+    });
+    const rideBtn = createButton(
+      `Ride ${shaft}`,
+      () => {
+        handlers.onRideElevator(shaft, Number.parseInt(select.value, 10));
+      },
+      { id: `ride-elevator-${shaft}`, className: "elevator-ride-btn" },
+    );
+    const position = view?.elevatorsView[shaft];
+    const positionText = position
+      ? `Floor ${position.floor} (${position.state})`
+      : "Unknown";
+    row.append(
+      createEl("span", { text: `Shaft ${shaft}: ${positionText} ` }),
+      callBtn,
+      select,
+      rideBtn,
+    );
     container.append(row);
   }
   return container;
 }
 
-function renderChannelControls(state: UIState, handlers: UIHandlers): HTMLElement {
+function renderEvidence(view: RoomStateView | null): HTMLElement {
+  const container = createEl("div", {
+    id: "evidence-panel",
+    className: "evidence-panel",
+  });
+  const cards = Object.entries(view?.evidenceView ?? {}).filter(
+    ([, evidence]) => evidence.card.present,
+  );
+  const cardList = createEl("div", {
+    id: "door-cards",
+    className: "door-cards",
+  });
+  cardList.textContent =
+    cards.length === 0
+      ? "Door cards: none"
+      : `Door cards: ${cards.map(([roomId, evidence]) => `${roomId} ${evidence.card.text}`).join(" · ")}`;
+  container.append(cardList);
+
+  const currentRoom = view?.roomsView ? findInsideRoom(view.roomsView) : null;
+  const currentEvidence = currentRoom
+    ? view?.evidenceView?.[currentRoom]
+    : undefined;
+  if (currentEvidence?.freshness) {
+    const freshnessText =
+      currentEvidence.freshness === "fresh" ? "Fresh trash" : "Settled trash";
+    container.append(
+      createEl("div", {
+        id: "trash-freshness",
+        className: `trash-freshness ${currentEvidence.freshness}`,
+        text: freshnessText,
+      }),
+    );
+  }
+  return container;
+}
+
+function renderChannelControls(
+  state: UIState,
+  handlers: UIHandlers,
+): HTMLElement {
   if (state.screen !== "inRoom") return createEl("div");
   const view = state.view;
-  const container = createEl("div", { id: "channel-controls", className: "channel-controls" });
+  const container = createEl("div", {
+    id: "channel-controls",
+    className: "channel-controls",
+  });
   const ME = view?.mySessionId ?? "";
   const me = view?.players.find((p) => p.id === ME);
   const roomId = view?.roomsView ? findInsideRoom(view.roomsView) : null;
@@ -167,9 +294,14 @@ function renderChannelControls(state: UIState, handlers: UIHandlers): HTMLElemen
   const prepBtn = createEl("button", {
     id: "channel-prep-btn",
     className: "channel-btn",
-    text: isSaboteur && roomState === "prepped" ? "Hold to sabotage (E)" : "Hold to prep (E)",
+    text:
+      isSaboteur && roomState === "prepped"
+        ? "Hold to sabotage (E)"
+        : "Hold to prep (E)",
   });
-  prepBtn.addEventListener("mousedown", () => handlers.onStartChannel(isSaboteur ? "unprep" : "prep", roomId));
+  prepBtn.addEventListener("mousedown", () =>
+    handlers.onStartChannel(isSaboteur ? "unprep" : "prep", roomId),
+  );
   prepBtn.addEventListener("mouseup", () => handlers.onCancelChannel());
   prepBtn.addEventListener("mouseleave", () => handlers.onCancelChannel());
   prepBtn.addEventListener("touchstart", (e) => {
@@ -186,7 +318,9 @@ function renderChannelControls(state: UIState, handlers: UIHandlers): HTMLElemen
       className: "channel-btn channel-fake",
       text: "Hold fake prep (Shift+E)",
     });
-    fakeBtn.addEventListener("mousedown", () => handlers.onStartChannel("fake", roomId));
+    fakeBtn.addEventListener("mousedown", () =>
+      handlers.onStartChannel("fake", roomId),
+    );
     fakeBtn.addEventListener("mouseup", () => handlers.onCancelChannel());
     fakeBtn.addEventListener("mouseleave", () => handlers.onCancelChannel());
     fakeBtn.addEventListener("touchstart", (e) => {
@@ -201,7 +335,9 @@ function renderChannelControls(state: UIState, handlers: UIHandlers): HTMLElemen
   return container;
 }
 
-function findInsideRoom(roomsView: Record<string, string | null>): string | null {
+function findInsideRoom(
+  roomsView: Record<string, string | null>,
+): string | null {
   for (const [roomId, state] of Object.entries(roomsView)) {
     if (state !== null) return roomId;
   }
@@ -210,11 +346,19 @@ function findInsideRoom(roomsView: Record<string, string | null>): string | null
 
 function renderResultsBanner(view: RoomStateView | null): HTMLElement | null {
   if (!view || view.phase !== "results") return null;
-  const banner = createEl("div", { id: "results-banner", className: "results-banner" });
+  const banner = createEl("div", {
+    id: "results-banner",
+    className: "results-banner",
+  });
   const winner = view.winner;
   const title = createEl("h1", {
     className: "results-title",
-    text: winner === "staff" ? "STAFF WIN" : winner === "saboteur" ? "SABOTEUR WIN" : "ROUND OVER",
+    text:
+      winner === "staff"
+        ? "STAFF WIN"
+        : winner === "saboteur"
+          ? "SABOTEUR WIN"
+          : "ROUND OVER",
   });
   if (winner === "staff") title.classList.add("staff-win");
   if (winner === "saboteur") title.classList.add("saboteur-win");
@@ -227,46 +371,136 @@ function renderResultsBanner(view: RoomStateView | null): HTMLElement | null {
       : "Saboteur reveal unavailable",
   });
 
-  banner.append(title, traitorLine);
+  const timeline = createEl("ol", {
+    id: "recap-timeline",
+    className: "recap-timeline",
+  });
+  for (const event of view.recapEvents) {
+    const detail = event.roomId || event.targetSessionId || "round";
+    timeline.append(
+      createEl("li", {
+        text: `${event.type.toUpperCase()} · ${detail} · ${new Date(event.timestamp).toLocaleTimeString()}`,
+      }),
+    );
+  }
+
+  banner.append(title, traitorLine, timeline);
   return banner;
 }
 
-function renderRoomScreen(container: HTMLElement, state: UIState, handlers: UIHandlers): void {
+function renderAccusations(
+  container: HTMLElement,
+  view: RoomStateView | null,
+  handlers: UIHandlers,
+): void {
+  if (!view || view.phase !== "playing") return;
+  const me = view.players.find((player) => player.id === view.mySessionId);
+  if (!me || me.fired || me.spectator || view.myRole !== "staff") return;
+  const targets = view.players.filter(
+    (target) =>
+      target.id !== me.id &&
+      !target.fired &&
+      !target.spectator &&
+      target.floor === me.floor &&
+      Math.abs(target.x - me.x) <= ACCUSATION_RANGE_TILES * TILE_SIZE_PX,
+  );
+  if (targets.length === 0) return;
+  const section = createEl("div", {
+    id: "accusation-controls",
+    className: "accusation-controls",
+  });
+  section.append(createEl("strong", { text: "Nearby staff review" }));
+  for (const target of targets) {
+    const button = createButton(
+      `Accuse ${target.name}`,
+      () => {
+        if (
+          typeof window === "undefined" ||
+          window.confirm(`Accuse ${target.name}?`)
+        ) {
+          handlers.onAccuse(target.id);
+        }
+      },
+      { id: `accuse-${target.id}` },
+    );
+    section.append(button);
+  }
+  container.append(section);
+}
+
+function renderRoomScreen(
+  container: HTMLElement,
+  state: UIState,
+  handlers: UIHandlers,
+): void {
   if (state.screen !== "inRoom") return;
   clearChildren(container);
   const header = createEl("h2", { text: `Room ${state.code}` });
-  const phaseLabel = createEl("div", { id: "phase-label", className: "phase", text: `Phase: ${state.view?.phase ?? "waiting"}` });
+  const phaseLabel = createEl("div", {
+    id: "phase-label",
+    className: "phase",
+    text: `Phase: ${state.view?.phase ?? "waiting"}`,
+  });
 
   // roster list
   const roster = createEl("ul", { id: "roster", className: "roster" });
   const players = state.view?.players ?? [];
+  const me = state.view?.players.find(
+    (player) => player.id === state.view?.mySessionId,
+  );
   for (const p of players) {
     const li = createEl("li");
-    const swatch = createSwatch(AVATAR_COLORS[p.colorIndex % AVATAR_COLORS.length] ?? "#888");
+    const swatch = createSwatch(
+      AVATAR_COLORS[p.colorIndex % AVATAR_COLORS.length] ?? "#888",
+    );
     const nameSpan = createEl("span", { text: p.name });
     nameSpan.style.marginLeft = "6px";
     li.append(swatch, nameSpan);
     roster.append(li);
   }
 
-  container.append(header, phaseLabel, roster, renderFloorIndicator(state.view));
+  container.append(
+    header,
+    phaseLabel,
+    roster,
+    renderFloorIndicator(state.view),
+    renderEvidence(state.view),
+  );
+
+  if (me?.spectator) {
+    container.append(
+      createEl("div", {
+        id: "spectator-banner",
+        className: "spectator-banner",
+        text: "SPECTATOR · Full building view",
+      }),
+    );
+  }
 
   // code display also
-  const codeDisplay = createEl("div", { id: "room-code", text: `Code: ${state.code}` });
+  const codeDisplay = createEl("div", {
+    id: "room-code",
+    text: `Code: ${state.code}`,
+  });
   codeDisplay.style.fontFamily = "monospace";
   container.append(codeDisplay);
 
   // Host-only controls
-  const isHost = !!state.view && state.view.mySessionId === state.view.hostSessionId;
+  const isHost =
+    !!state.view && state.view.mySessionId === state.view.hostSessionId;
   if (isHost) {
     const phase = state.view?.phase ?? "waiting";
     if (phase === "waiting") {
       const playerCount = state.view?.players.length ?? 0;
       const canStart = playerCount >= 4;
-      const hostBtn = createButton("Start round", () => handlers.onStartRound(), {
-        id: "host-start-btn",
-        disabled: !canStart,
-      });
+      const hostBtn = createButton(
+        "Start round",
+        () => handlers.onStartRound(),
+        {
+          id: "host-start-btn",
+          disabled: !canStart,
+        },
+      );
       if (!canStart) hostBtn.title = "Need at least 4 players";
       container.append(hostBtn);
       const countHint = createEl("div", {
@@ -283,33 +517,50 @@ function renderRoomScreen(container: HTMLElement, state: UIState, handlers: UIHa
   // Results overlay v1: winner banner + traitor reveal only; no recap timeline
   const banner = renderResultsBanner(state.view);
   if (banner) {
-    const overlay = createEl("div", { id: "results-overlay", className: "results-overlay" });
+    const overlay = createEl("div", {
+      id: "results-overlay",
+      className: "results-overlay",
+    });
     overlay.append(banner);
     container.append(overlay);
   }
 
-  container.append(renderElevatorControls(handlers));
+  if (!me?.spectator)
+    container.append(renderElevatorControls(handlers, state.view));
 
   const roomStates = renderRoomStateList(state.view?.roomsView ?? {});
   container.append(roomStates);
 
-  container.append(renderChannelControls(state, handlers));
+  if (!me?.spectator) container.append(renderChannelControls(state, handlers));
+  renderAccusations(container, state.view, handlers);
 
   if (state.error) {
-    const err = createEl("div", { id: "room-error", className: "error", text: state.error });
+    const err = createEl("div", {
+      id: "room-error",
+      className: "error",
+      text: state.error,
+    });
     err.style.color = "#b00020";
     container.append(err);
   }
   if (state.view) {
-    const hostInfo = createEl("div", { id: "host-info", text: `You: ${state.view.mySessionId.slice(0, 6)} Host: ${state.view.hostSessionId.slice(0, 6)}` });
+    const hostInfo = createEl("div", {
+      id: "host-info",
+      text: `You: ${state.view.mySessionId.slice(0, 6)} Host: ${state.view.hostSessionId.slice(0, 6)}`,
+    });
     hostInfo.style.fontSize = "10px";
     hostInfo.style.opacity = "0.6";
     container.append(hostInfo);
   }
 }
 
-export function renderOverlay(overlay: HTMLElement, state: UIState, handlers: UIHandlers): void {
-  const { nameScreen, menuScreen, roomScreen, toastEl } = ensureContainers(overlay);
+export function renderOverlay(
+  overlay: HTMLElement,
+  state: UIState,
+  handlers: UIHandlers,
+): void {
+  const { nameScreen, menuScreen, roomScreen, toastEl } =
+    ensureContainers(overlay);
 
   // control visibility
   nameScreen.hidden = state.screen !== "idle";
@@ -388,6 +639,9 @@ export function mountUI(
     },
     onRideElevator: (shaft: "A" | "B", destFloor: number) => {
       client.rideElevator(shaft, destFloor);
+    },
+    onAccuse: (targetSessionId: string) => {
+      client.accuse(targetSessionId);
     },
     onStartChannel: (type: "prep" | "unprep" | "fake", roomId: string) => {
       client.startChannel(type, roomId);

@@ -6,7 +6,17 @@ import type { ElevatorShaft } from "@grandhotel/shared";
 
 function makeView(overrides?: Partial<RoomStateView>): RoomStateView {
   return {
-    players: [{ id: "a1", name: "Alice", colorIndex: 0, x: 100, floor: 0 }],
+    players: [
+      {
+        id: "a1",
+        name: "Alice",
+        colorIndex: 0,
+        x: 100,
+        floor: 0,
+        fired: false,
+        spectator: false,
+      },
+    ],
     phase: "waiting",
     mySessionId: "a1",
     hostSessionId: "a1",
@@ -20,6 +30,7 @@ function makeView(overrides?: Partial<RoomStateView>): RoomStateView {
     shiftEndsAt: null,
     winner: null,
     traitorReveal: null,
+    recapEvents: [],
     ...overrides,
   };
 }
@@ -75,7 +86,11 @@ describe("ui reducer — lobby flow (M0.3.3)", () => {
     if (s2.screen === "inRoom") expect(s2.code).toBe("WXYZ");
 
     // stateUpdate populates view
-    const view = makeView({ phase: "playing", hostSessionId: "a1", mySessionId: "a1" });
+    const view = makeView({
+      phase: "playing",
+      hostSessionId: "a1",
+      mySessionId: "a1",
+    });
     let s3 = uiReducer(s2, { type: "stateUpdate", view });
     expect(s3.screen).toBe("inRoom");
     if (s3.screen === "inRoom") {
@@ -88,17 +103,26 @@ describe("ui reducer — lobby flow (M0.3.3)", () => {
     let s = uiReducer(initialState, { type: "submitName", name: "Dave" });
     s = uiReducer(s, { type: "joined", code: "ABCD" });
     expect(s.screen).toBe("inRoom");
-    s = uiReducer(s, { type: "clientEvent", event: { type: "rejected", reason: "full" } });
+    s = uiReducer(s, {
+      type: "clientEvent",
+      event: { type: "rejected", reason: "full" },
+    });
     expect(s.error).toMatch(/full/i);
     expect(s.error).toMatch(/Rejected/i);
 
     // also bad-name
     s = uiReducer(initialState, { type: "submitName", name: "Eve" });
-    s = uiReducer(s, { type: "clientEvent", event: { type: "rejected", reason: "bad-name" } });
+    s = uiReducer(s, {
+      type: "clientEvent",
+      event: { type: "rejected", reason: "bad-name" },
+    });
     expect(s.error).toMatch(/bad-name/i);
 
     // generic error surfaces message
-    s = uiReducer(s, { type: "clientEvent", event: { type: "error", message: "boom" } });
+    s = uiReducer(s, {
+      type: "clientEvent",
+      event: { type: "error", message: "boom" },
+    });
     expect(s.error).toBe("boom");
   });
 
@@ -124,7 +148,10 @@ describe("ui reducer — lobby flow (M0.3.3)", () => {
       myFloor: 2,
       roomsView: { "2-0": "clean", "2-1": null },
       elevatorsView: {
-        A: { floor: 1, state: "arriving" } as { floor: number; state: "idle" | "arriving" | "boarding" },
+        A: { floor: 1, state: "arriving" } as {
+          floor: number;
+          state: "idle" | "arriving" | "boarding";
+        },
         B: { floor: 2, state: "idle" },
       },
       shiftEndsAt: 123456,
@@ -158,7 +185,10 @@ describe("ui reducer — lobby flow (M0.3.3)", () => {
     if (s.screen === "inRoom") {
       expect(s.view?.phase).toBe("results");
       expect(s.view?.winner).toBe("saboteur");
-      expect(s.view?.traitorReveal).toEqual({ sessionId: "sess-traitor", name: "Morgana" });
+      expect(s.view?.traitorReveal).toEqual({
+        sessionId: "sess-traitor",
+        name: "Morgana",
+      });
     }
   });
 

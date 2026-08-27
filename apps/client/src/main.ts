@@ -4,7 +4,17 @@ import type { UIAction, UIState } from "./ui/reducer.js";
 import { filterCodeInput, initialState, uiReducer } from "./ui/reducer.js";
 import { renderOverlay } from "./ui/screens.js";
 import { Interpolator } from "./movement/interpolate.js";
-import { CHANNEL_DURATIONS, CLIENT_INPUT_SEND_HZ, PLAYER_SPEED_PX_S } from "@grandhotel/shared";
+import {
+  CHANNEL_DURATIONS,
+  CLIENT_INPUT_SEND_HZ,
+  PLAYER_SPEED_PX_S,
+} from "@grandhotel/shared";
+import {
+  FLOOR_Y_STEP,
+  HALLWAY_Y,
+  RUSTLE_RANGE_TILES,
+  TILE_SIZE_PX,
+} from "@grandhotel/shared";
 import type { HallScene as HallSceneType } from "./game/HallScene.js";
 
 let uiState: UIState = initialState;
@@ -174,7 +184,8 @@ function updateChannelBar(now: number): void {
   const pct = Math.max(0, Math.min(100, (elapsed / max) * 100));
   fill.style.width = `${pct}%`;
   // Real prep and fake use identical visuals; unprep shows red.
-  fill.style.background = channelActive.type === "unprep" ? "#b00020" : "#4caf50";
+  fill.style.background =
+    channelActive.type === "unprep" ? "#b00020" : "#4caf50";
   label.textContent =
     channelActive.type === "unprep"
       ? "SABOTAGING..."
@@ -195,24 +206,64 @@ function updateHud(view: RoomStateView | null): void {
 
   hud.hidden = false;
   if (view.phase === "results") {
-    hud.textContent = "ROUND OVER";
+    hud.textContent = `ROUND OVER · Coverage: ${view.coveragePercent ?? 0}%`;
     return;
   }
   if (view.phase === "waiting") {
-    hud.textContent = "WAITING FOR HOST";
+    hud.textContent = `WAITING FOR HOST · Coverage: ${view.coveragePercent ?? 0}%`;
     return;
   }
 
   const end = view.shiftEndsAt;
   if (!end || end <= 0) {
-    hud.textContent = "";
+    hud.textContent = `Coverage: ${view.coveragePercent ?? 0}%`;
     return;
   }
   const remainingMs = Math.max(0, end - Date.now());
   const totalSeconds = Math.ceil(remainingMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  hud.textContent = `Shift: ${minutes}:${seconds.toString().padStart(2, "0")}`;
+  hud.textContent = `Shift: ${minutes}:${seconds.toString().padStart(2, "0")} · Coverage: ${view.coveragePercent ?? 0}%`;
+}
+
+function playRustle(event: { x: number; y: number }): void {
+  if (typeof window === "undefined" || !hallScene) return;
+  const view = uiState.screen === "inRoom" ? uiState.view : null;
+  const local = view?.players.find((p) => p.id === view.mySessionId) ?? null;
+  if (
+    !local ||
+    local.floor !== Math.round((event.y - HALLWAY_Y) / FLOOR_Y_STEP)
+  )
+    return;
+  const distanceTiles =
+    Math.max(
+      Math.abs(local.x - event.x),
+      Math.abs(local.floor * FLOOR_Y_STEP + HALLWAY_Y - event.y),
+    ) / TILE_SIZE_PX;
+  if (distanceTiles > RUSTLE_RANGE_TILES) return;
+  const AudioContextCtor =
+    window.AudioContext ??
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+  if (!AudioContextCtor) return;
+  const context = new AudioContextCtor();
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  const panner = context.createStereoPanner();
+  oscillator.type = "sawtooth";
+  oscillator.frequency.value = 180;
+  gain.gain.value = Math.max(
+    0.01,
+    0.08 * (1 - distanceTiles / RUSTLE_RANGE_TILES),
+  );
+  panner.pan.value = Math.max(
+    -1,
+    Math.min(1, (event.x - local.x) / (RUSTLE_RANGE_TILES * TILE_SIZE_PX)),
+  );
+  oscillator.connect(gain).connect(panner).connect(context.destination);
+  oscillator.start();
+  oscillator.stop(context.currentTime + 0.12);
+  oscillator.addEventListener("ended", () => void context.close());
 }
 
 function syncLocalState(view: RoomStateView): void {
@@ -239,7 +290,8 @@ function syncRoster(view: RoomStateView): void {
       interpolators.set(p.id, interp);
       hallScene.addRemote(p.id, p.colorIndex, p.floor);
     }
-    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const now =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
     interp.push(now, p.x);
     hallScene.setRemoteFloor(p.id, p.floor);
   }
@@ -316,11 +368,16 @@ const handlers = {
     if (resultsFrozen) return;
     client.rideElevator(shaft, destFloor);
   },
+  onAccuse: (targetSessionId: string): void => {
+    if (resultsFrozen) return;
+    client.accuse(targetSessionId);
+  },
   onStartChannel: (type: "prep" | "unprep" | "fake", roomId: string): void => {
     if (resultsFrozen) return;
     // Mirror the keyboard hold path so the on-screen buttons also drive the
     // shared progress-bar overlay (real prep / fake prep / unprep).
-    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const now =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
     channelActive = { roomId, type, startAt: now };
     client.startChannel(type, roomId);
   },
@@ -339,6 +396,7 @@ client.onState((view: RoomStateView) => {
 });
 
 client.onEvent((ev) => {
+  if (ev.type === "sabotage") playRustle(ev);
   dispatch({ type: "clientEvent", event: ev });
 });
 
@@ -364,7 +422,10 @@ function onKeyDown(e: KeyboardEvent): void {
   let type: "prep" | "unprep" | "fake" | null = null;
   if (e.shiftKey) {
     if (role === "saboteur") type = "fake";
-  } else if (role === "saboteur" && (state === "prepped" || state === "trashed")) {
+  } else if (
+    role === "saboteur" &&
+    (state === "prepped" || state === "trashed")
+  ) {
     type = "unprep";
   } else {
     type = "prep";
@@ -375,7 +436,8 @@ function onKeyDown(e: KeyboardEvent): void {
   if (!type) return;
 
   channelKeyHeld = true;
-  const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const now =
+    typeof performance !== "undefined" ? performance.now() : Date.now();
   channelActive = { roomId, type, startAt: now };
   client.startChannel(type, roomId);
   e.preventDefault();

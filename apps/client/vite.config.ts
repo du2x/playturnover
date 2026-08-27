@@ -2,10 +2,11 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   server: {
-    port: 5173
+    host: true,
+    port: 5173,
   },
   test: {
     environment: "jsdom",
-    include: ["test/**/*.test.ts", "src/**/*.test.ts"]
-  }
+    include: ["test/**/*.test.ts", "src/**/*.test.ts"],
+  },
 });

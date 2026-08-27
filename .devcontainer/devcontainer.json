@@ -2,15 +2,13 @@
   "name": "Grand Hotel (turnover)",
   "image": "mcr.microsoft.com/devcontainers/typescript-node:20",
   "features": {
-    "ghcr.io/devcontainers/features/pnpm:1": {
-      "version": "9.15.9"
-    },
     "ghcr.io/devcontainers/features/git:1": {}
   },
   "containerEnv": {
     "PNPM_HOME": "/usr/local/share/pnpm",
     "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"
   },
+  "onCreateCommand": "sudo corepack enable && corepack prepare --activate",
   "postCreateCommand": "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi",
   "forwardPorts": [
     2567,

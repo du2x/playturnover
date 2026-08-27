@@ -81,3 +81,21 @@ export const ResultsMsgSchema = z
   })
   .strict();
 export type ResultsMsg = z.infer<typeof ResultsMsgSchema>;
+
+/** M2 — sabotage completion event used to trigger local rustle audio. */
+export const SabotageEventSchema = z
+  .object({
+    roomId: z.string().min(1),
+    position: z.object({ x: z.number(), y: z.number() }).strict(),
+    timestamp: z.number(),
+  })
+  .strict();
+export type SabotageEvent = z.infer<typeof SabotageEventSchema>;
+
+/** M3 — staff accusation submitted for server-side validation. */
+export const AccusationMsgSchema = z
+  .object({
+    targetSessionId: z.string().min(1),
+  })
+  .strict();
+export type AccusationMsg = z.infer<typeof AccusationMsgSchema>;

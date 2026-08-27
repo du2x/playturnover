@@ -20,6 +20,18 @@
       "env": {
         "NODE_ENV": "development"
       }
+    },
+    {
+      "name": "Server: built (local single-origin)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "node apps/server/dist/index.js",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "NODE_ENV": "production",
+        "PORT": "8080",
+        "STATIC_DIR": "${workspaceFolder}/apps/client/dist"
+      }
     }
   ],
   "compounds": [
@@ -28,6 +40,12 @@
       "configurations": [
         "Server: dev",
         "Client: dev"
+      ]
+    },
+    {
+      "name": "Local deploy (built server)",
+      "configurations": [
+        "Server: built (local single-origin)"
       ]
     }
   ]

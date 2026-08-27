@@ -4,6 +4,8 @@ import {
   ELEVATOR_ARRIVE_MS,
   ELEVATOR_INTERACT_RADIUS,
   ELEVATOR_RIDE_MS,
+  ACCUSATION_RANGE_TILES,
+  FRESHNESS_WINDOW_MS,
   HALLWAY_MAX_X,
   HALLWAY_MIN_X,
   LOBBY_CENTER,
@@ -16,10 +18,12 @@ import {
   SERVER_MAX_SPEED_PX_S,
   SERVER_PATCH_RATE_MS,
   SHIFT_LENGTH_S,
+  TILE_SIZE_PX,
 } from "@grandhotel/shared";
 import {
   ElevatorCar,
   PlayerState,
+  RecapEvent,
   RoomData,
   RoomState,
   TraitorReveal,
@@ -28,11 +32,17 @@ import {
   CallElevatorMsgSchema,
   ChannelCancelMsgSchema,
   ChannelStartMsgSchema,
+  AccusationMsgSchema,
   MoveMsgSchema,
   RideElevatorMsgSchema,
   StartRoundMsgSchema,
 } from "@grandhotel/shared";
-import { getAllRoomIds, getRoomRect, getElevatorX } from "@grandhotel/shared";
+import {
+  getAllRoomIds,
+  getHallBounds,
+  getRoomRect,
+  getElevatorX,
+} from "@grandhotel/shared";
 import { isInsideRoom } from "@grandhotel/shared";
 import type { RoomStateType } from "@grandhotel/shared";
 import {
@@ -48,7 +58,12 @@ import {
 import type { ElevatorCarState } from "../elevator.js";
 import { canStartChannel, applyChannelCompletion } from "../channels.js";
 import type { Channel } from "../channels.js";
-import { attritionWinner, beginShift, computeCoverage, coverageWinner } from "../shift.js";
+import {
+  attritionWinner,
+  beginShift,
+  computeCoverage,
+  coverageWinner,
+} from "../shift.js";
 import type { Clock } from "../time.js";
 import { ColyseusClock } from "../time.js";
 import type { Cancel } from "../time.js";
@@ -78,7 +93,10 @@ export class HotelRoom extends Room<RoomState> {
   declare hasReachedMaxClients: () => boolean;
   declare setPatchRate: (ms: number) => void;
   declare setState: (state: RoomState) => void;
-  declare onMessage: (type: string, cb: (client: Client, data: unknown) => void) => void;
+  declare onMessage: (
+    type: string,
+    cb: (client: Client, data: unknown) => void,
+  ) => void;
   private lastMoveAt = new Map<string, number>();
   private clientMap = new Map<string, Client>();
   private saboteurSessionId: string | null = null;
@@ -89,6 +107,7 @@ export class HotelRoom extends Room<RoomState> {
   private timers = new Map<string, Cancel>();
   private injectedClock?: Clock;
   private clockAdapter!: Clock;
+  private saboteurHasCommittedCrime = false;
 
   constructor(clock?: Clock) {
     super();
@@ -118,7 +137,11 @@ export class HotelRoom extends Room<RoomState> {
 
     const opts = options as Record<string, unknown> | null | undefined;
     const override = opts?.["shiftLengthSOverride"];
-    if (typeof override === "number" && Number.isFinite(override) && override > 0) {
+    if (
+      typeof override === "number" &&
+      Number.isFinite(override) &&
+      override > 0
+    ) {
       this.shiftLengthS = override;
     } else if (
       typeof opts?.["shiftLengthS"] === "number" &&
@@ -141,6 +164,7 @@ export class HotelRoom extends Room<RoomState> {
     this.state.winner = null;
     this.state.traitorReveal = null;
     this.state.coverage = 0;
+    this.state.coveragePercent = 0;
 
     // building topology — ROOM_COUNT rooms via shared getRoomRect
     const ids = getAllRoomIds();
@@ -154,6 +178,10 @@ export class HotelRoom extends Room<RoomState> {
       rd.xMin = rect.xMin;
       rd.xMax = rect.xMax;
       rd.state = "clean";
+      rd.doorCard.present = false;
+      rd.doorCard.text = "";
+      rd.trashedAtTime = 0;
+      rd.freshness = null;
       this.state.rooms.set(id, rd);
     }
 
@@ -196,6 +224,10 @@ export class HotelRoom extends Room<RoomState> {
 
     this.onMessage("channelCancel", (client: Client, data: unknown) => {
       this.handleChannelCancel(client, data);
+    });
+
+    this.onMessage("accusation", (client: Client, data: unknown) => {
+      this.handleAccusation(client, data);
     });
   }
 
@@ -296,6 +328,7 @@ export class HotelRoom extends Room<RoomState> {
     if (!parsed.success) return;
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
+    if (player.fired || player.spectator) return;
 
     const now = this.now();
     const last = this.lastMoveAt.get(client.sessionId) ?? now;
@@ -307,7 +340,28 @@ export class HotelRoom extends Room<RoomState> {
     this.lastMoveAt.set(client.sessionId, now);
 
     // walk-out cancels any active channel (R-9)
+    this.checkWalkInCatch(client.sessionId);
     this.checkChannelBounds(client.sessionId);
+  }
+
+  private checkWalkInCatch(enteringSessionId: string): void {
+    const entering = this.state.players.get(enteringSessionId);
+    if (!entering) return;
+    for (const [sessionId, channel] of this.activeChannels) {
+      if (sessionId === enteringSessionId || channel.type !== "unprep")
+        continue;
+      const saboteur = this.state.players.get(sessionId);
+      if (
+        saboteur &&
+        !saboteur.fired &&
+        isInsideRoom(entering.x, entering.floor, channel.roomId)
+      ) {
+        this.recordEvent("catch", enteringSessionId, sessionId, channel.roomId);
+        this.firePlayer(sessionId);
+        this.endRound("staff");
+        return;
+      }
+    }
   }
 
   private checkChannelBounds(sessionId: string): void {
@@ -327,7 +381,9 @@ export class HotelRoom extends Room<RoomState> {
     if (this.state.phase !== "waiting") return;
 
     if (this.state.players.size < MIN_PLAYERS) {
-      const anyClient = client as unknown as { send?: (t: string, d: unknown) => void };
+      const anyClient = client as unknown as {
+        send?: (t: string, d: unknown) => void;
+      };
       if (typeof anyClient.send === "function") {
         anyClient.send("error", { reason: "need-4-players" });
       }
@@ -353,11 +409,15 @@ export class HotelRoom extends Room<RoomState> {
     );
     this.state.shiftEndsAt = endsAt;
     this.saboteurSessionId = saboteurSessionId;
+    this.saboteurHasCommittedCrime = false;
+    this.state.recapEvents.splice(0, this.state.recapEvents.length);
     this.roleMap.clear();
     for (const [sid, role] of roleBySessionId) {
       this.roleMap.set(sid, role);
       const c = this.clientMap.get(sid);
-      const anyC = c as unknown as { send?: (t: string, d: unknown) => void } | undefined;
+      const anyC = c as unknown as
+        | { send?: (t: string, d: unknown) => void }
+        | undefined;
       if (c && anyC && typeof anyC.send === "function") {
         anyC.send("role", { role });
       }
@@ -370,14 +430,41 @@ export class HotelRoom extends Room<RoomState> {
   /** Starts the 1-second interval that checks for the shift buzzer. */
   private startShiftTimer(): void {
     this.cancel("shift");
-    this.timers.set("shift", this.clockAdapter.setInterval(1000, () => this.checkBuzzer()));
+    this.timers.set(
+      "shift",
+      this.clockAdapter.setInterval(1000, () => this.checkBuzzer()),
+    );
+    this.cancel("evidence");
+    this.timers.set(
+      "evidence",
+      this.clockAdapter.setInterval(1000, () => this.updateEvidence()),
+    );
+    this.updateEvidence();
+  }
+
+  private updateEvidence(): void {
+    const now = this.now();
+    let preppedCount = 0;
+    for (const room of this.state.rooms.values()) {
+      if (room.state === "prepped") preppedCount += 1;
+      if (room.trashedAtTime > 0) {
+        room.freshness =
+          now - room.trashedAtTime < FRESHNESS_WINDOW_MS ? "fresh" : "settled";
+      } else {
+        room.freshness = null;
+      }
+    }
+    this.state.coverage = computeCoverage(preppedCount, ROOM_COUNT);
+    this.state.coveragePercent = Math.floor(this.state.coverage * 100);
   }
 
   /** Shared path for declaring the end of the round. */
   private endRound(winner: "staff" | "saboteur"): void {
     if (this.state.phase === "results") return;
 
-    const preppedCount = [...this.state.rooms.values()].filter((r) => r.state === "prepped").length;
+    const preppedCount = [...this.state.rooms.values()].filter(
+      (r) => r.state === "prepped",
+    ).length;
     this.state.coverage = computeCoverage(preppedCount, ROOM_COUNT);
 
     this.state.winner = winner;
@@ -398,13 +485,16 @@ export class HotelRoom extends Room<RoomState> {
     }
 
     this.cancel("shift");
+    this.cancel("evidence");
     this.broadcastResults();
   }
 
   private checkBuzzer(): void {
     if (this.state.phase !== "playing") return;
     if (this.now() >= this.state.shiftEndsAt) {
-      const preppedCount = [...this.state.rooms.values()].filter((r) => r.state === "prepped").length;
+      const preppedCount = [...this.state.rooms.values()].filter(
+        (r) => r.state === "prepped",
+      ).length;
       const coverage = computeCoverage(preppedCount, ROOM_COUNT);
       this.endRound(coverageWinner(coverage));
     }
@@ -414,7 +504,11 @@ export class HotelRoom extends Room<RoomState> {
   private checkAttritionWin(): void {
     if (this.state.phase !== "playing") return;
     const totalConnected = this.state.players.size;
-    const saboteurConnected = this.saboteurSessionId ? (this.state.players.has(this.saboteurSessionId) ? 1 : 0) : 0;
+    const saboteurConnected = this.saboteurSessionId
+      ? this.state.players.has(this.saboteurSessionId)
+        ? 1
+        : 0
+      : 0;
     const staffCount = totalConnected - saboteurConnected;
     const winner = attritionWinner(totalConnected, saboteurConnected);
     if (winner) this.endRound(winner);
@@ -439,7 +533,9 @@ export class HotelRoom extends Room<RoomState> {
 
   // ── elevator helpers ───────────────────────────────────────────────────────
 
-  private getElevator(shaft: string): { car: ElevatorCar; runtime: ElevatorCarState } | null {
+  private getElevator(
+    shaft: string,
+  ): { car: ElevatorCar; runtime: ElevatorCarState } | null {
     const car = this.state.elevators.get(shaft);
     if (!car) return null;
     const runtime = this.elevatorRuntime.get(car);
@@ -457,11 +553,15 @@ export class HotelRoom extends Room<RoomState> {
   }
 
   private scheduleElevatorArrival(shaft: string): void {
-    this.schedule("arrive:" + shaft, ELEVATOR_ARRIVE_MS, () => this.handleElevatorArrived(shaft));
+    this.schedule("arrive:" + shaft, ELEVATOR_ARRIVE_MS, () =>
+      this.handleElevatorArrived(shaft),
+    );
   }
 
   private scheduleElevatorRide(shaft: string): void {
-    this.schedule("ride:" + shaft, ELEVATOR_RIDE_MS, () => this.handleElevatorRode(shaft));
+    this.schedule("ride:" + shaft, ELEVATOR_RIDE_MS, () =>
+      this.handleElevatorRode(shaft),
+    );
   }
 
   private handleCallElevator(client: Client, raw: unknown): void {
@@ -469,11 +569,16 @@ export class HotelRoom extends Room<RoomState> {
     if (!parsed.success) return;
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
+    if (player.fired || player.spectator) return;
     if (this.state.phase !== "playing") return;
     const elevator = this.getElevator(parsed.data.shaft);
     if (!elevator) return;
     const { car, runtime } = elevator;
-    if (Math.abs(player.x - getElevatorX(parsed.data.shaft)) > ELEVATOR_INTERACT_RADIUS) return;
+    if (
+      Math.abs(player.x - getElevatorX(parsed.data.shaft)) >
+      ELEVATOR_INTERACT_RADIUS
+    )
+      return;
     const now = this.now();
 
     const wasIdle = runtime.state === "idle";
@@ -491,6 +596,7 @@ export class HotelRoom extends Room<RoomState> {
     if (this.state.phase !== "playing") return;
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
+    if (player.fired || player.spectator) return;
     const elevator = this.getElevator(parsed.data.shaft);
     if (!elevator) return;
     const { car, runtime } = elevator;
@@ -502,7 +608,9 @@ export class HotelRoom extends Room<RoomState> {
       parsed.data.destFloor,
     );
     if (!result.ok) {
-      const anyClient = client as unknown as { send?: (t: string, d: unknown) => void };
+      const anyClient = client as unknown as {
+        send?: (t: string, d: unknown) => void;
+      };
       if (typeof anyClient.send === "function") {
         anyClient.send("error", { reason: result.reason });
       }
@@ -529,7 +637,9 @@ export class HotelRoom extends Room<RoomState> {
       // early must re-arm for the remaining delay instead of abandoning the
       // arrival, or the car stays "arriving" forever.
       const remaining = Math.max(0, runtime.arriveAt - this.now());
-      this.schedule("arrive:" + shaft, remaining, () => this.handleElevatorArrived(shaft));
+      this.schedule("arrive:" + shaft, remaining, () =>
+        this.handleElevatorArrived(shaft),
+      );
       return;
     }
     this.timers.delete("arrive:" + shaft);
@@ -586,6 +696,7 @@ export class HotelRoom extends Room<RoomState> {
     if (this.state.phase !== "playing") return;
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
+    if (player.fired || player.spectator) return;
     const room = this.state.rooms.get(parsed.data.roomId);
     if (!room) return;
 
@@ -606,7 +717,9 @@ export class HotelRoom extends Room<RoomState> {
     );
 
     if (!result.ok) {
-      const anyClient = client as unknown as { send?: (t: string, d: unknown) => void };
+      const anyClient = client as unknown as {
+        send?: (t: string, d: unknown) => void;
+      };
       if (typeof anyClient.send === "function") {
         anyClient.send("error", { reason: result.reason });
       }
@@ -624,7 +737,9 @@ export class HotelRoom extends Room<RoomState> {
     }
     this.activeChannels.set(sessionId, channel);
     const delay = Math.max(0, channel.endsAt - this.now());
-    this.schedule("channel:" + sessionId, delay, () => this.completeChannel(sessionId));
+    this.schedule("channel:" + sessionId, delay, () =>
+      this.completeChannel(sessionId),
+    );
   }
 
   private handleChannelCancel(client: Client, raw: unknown): void {
@@ -632,6 +747,76 @@ export class HotelRoom extends Room<RoomState> {
     if (!parsed.success) return;
     if (this.state.phase !== "playing") return;
     this.cancelChannel(client.sessionId);
+  }
+
+  private handleAccusation(client: Client, raw: unknown): void {
+    const parsed = AccusationMsgSchema.safeParse(raw ?? {});
+    if (!parsed.success || this.state.phase !== "playing") return;
+    const accuser = this.state.players.get(client.sessionId);
+    const target = this.state.players.get(parsed.data.targetSessionId);
+    if (
+      !accuser ||
+      !target ||
+      accuser.fired ||
+      accuser.spectator ||
+      target.fired ||
+      target.spectator ||
+      this.getRoleFor(client.sessionId) !== "staff" ||
+      client.sessionId === parsed.data.targetSessionId ||
+      accuser.floor !== target.floor ||
+      Math.abs(accuser.x - target.x) > ACCUSATION_RANGE_TILES * TILE_SIZE_PX
+    ) {
+      return;
+    }
+
+    const targetIsSaboteur =
+      parsed.data.targetSessionId === this.saboteurSessionId;
+    const correct = targetIsSaboteur && this.saboteurHasCommittedCrime;
+    this.recordEvent(
+      "accusation",
+      client.sessionId,
+      parsed.data.targetSessionId,
+      "",
+      correct,
+      targetIsSaboteur,
+      !correct,
+    );
+    if (correct) {
+      this.firePlayer(parsed.data.targetSessionId);
+      this.endRound("staff");
+    } else {
+      this.firePlayer(client.sessionId);
+      this.checkAttritionWin();
+    }
+  }
+
+  private firePlayer(sessionId: string): void {
+    const player = this.state.players.get(sessionId);
+    if (!player || player.fired) return;
+    this.cancelChannel(sessionId);
+    player.fired = true;
+    player.spectator = true;
+  }
+
+  private recordEvent(
+    type: string,
+    actorSessionId: string,
+    targetSessionId: string,
+    roomId: string,
+    valid = false,
+    wasTargetSaboteur = false,
+    crimeOccurred = false,
+  ): void {
+    const event = new RecapEvent();
+    event.type = type;
+    event.actorSessionId = actorSessionId;
+    event.targetSessionId = targetSessionId;
+    event.roomId = roomId;
+    event.timestamp = this.now();
+    event.valid = valid;
+    event.wasTargetSaboteur = wasTargetSaboteur;
+    event.crimeOccurred = crimeOccurred;
+    this.state.recapEvents.push(event);
   }
 
   private cancelChannel(sessionId: string): void {
@@ -664,9 +849,48 @@ export class HotelRoom extends Room<RoomState> {
       return;
     }
 
+    const previousState = room.state;
     room.state = applyChannelCompletion(channel.type, room.state);
+    if (
+      channel.type === "prep" &&
+      previousState === "clean" &&
+      room.state === "prepped"
+    ) {
+      room.doorCard.present = true;
+      room.doorCard.text = "PREPPED";
+    } else if (channel.type === "unprep" && room.state === "trashed") {
+      room.doorCard.present = true;
+      room.doorCard.text = "TRASHED";
+      room.trashedAtTime = this.now();
+      room.freshness = "fresh";
+      this.saboteurHasCommittedCrime = true;
+      this.recordEvent(
+        "sabotage",
+        sessionId,
+        "",
+        channel.roomId,
+        true,
+        true,
+        true,
+      );
+      this.broadcastSabotageEvent(channel.roomId, player);
+    }
+    this.updateEvidence();
     this.activeChannels.delete(sessionId);
     player.activeChannel = null;
+  }
+
+  private broadcastSabotageEvent(roomId: string, player: PlayerState): void {
+    const position = { x: player.x, y: getHallBounds(player.floor).y };
+    const event = { roomId, position, timestamp: this.now() };
+    for (const client of this.clientMap.values()) {
+      const anyClient = client as unknown as {
+        send?: (type: string, data: unknown) => void;
+      };
+      if (typeof anyClient.send === "function") {
+        anyClient.send("sabotageEvent", event);
+      }
+    }
   }
 
   /**

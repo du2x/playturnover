@@ -1,7 +1,16 @@
 import { Client } from "colyseus.js";
 import type { Room } from "colyseus.js";
-import { getAllRoomIds, getElevatorX, isInsideRoom, MAX_NAME_LENGTH } from "@grandhotel/shared";
-import type { ElevatorShaft, RoleType, RoomStateType } from "@grandhotel/shared";
+import {
+  getAllRoomIds,
+  getElevatorX,
+  isInsideRoom,
+  MAX_NAME_LENGTH,
+} from "@grandhotel/shared";
+import type {
+  ElevatorShaft,
+  RoleType,
+  RoomStateType,
+} from "@grandhotel/shared";
 import type {
   ChannelType,
   ClientEvent,
@@ -16,7 +25,9 @@ import type {
 
 function getEndpoint(): string {
   try {
-    const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+    const env = (
+      import.meta as unknown as { env?: Record<string, string | undefined> }
+    ).env;
     if (env?.VITE_GAME_URL) return env.VITE_GAME_URL;
   } catch {
     // ignore
@@ -25,13 +36,20 @@ function getEndpoint(): string {
     return window.location.origin;
   }
   // fallback for node/vitest
-  const procEnv = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process
-    ?.env;
+  const procEnv = (
+    globalThis as unknown as {
+      process?: { env?: Record<string, string | undefined> };
+    }
+  ).process?.env;
   if (procEnv?.VITE_GAME_URL) return procEnv.VITE_GAME_URL;
   return "http://localhost:2567";
 }
 
-function toView(state: unknown, mySessionId: string, myRole: RoleType | null): RoomStateView | null {
+function toView(
+  state: unknown,
+  mySessionId: string,
+  myRole: RoleType | null,
+): RoomStateView | null {
   if (!state || typeof state !== "object") return null;
   const s = state as {
     players?: unknown;
@@ -42,6 +60,8 @@ function toView(state: unknown, mySessionId: string, myRole: RoleType | null): R
     shiftEndsAt?: unknown;
     winner?: unknown;
     traitorReveal?: unknown | null;
+    coveragePercent?: unknown;
+    recapEvents?: unknown;
   };
 
   const players: RoomStateView["players"] = [];
@@ -56,6 +76,8 @@ function toView(state: unknown, mySessionId: string, myRole: RoleType | null): R
         colorIndex: (p.colorIndex as number) ?? 0,
         x: (p.x as number) ?? 0,
         floor: (p.floor as number) ?? 0,
+        fired: p.fired === true,
+        spectator: p.spectator === true,
       });
       if (pid === mySessionId) {
         myFloor = (p.floor as number) ?? 0;
@@ -64,7 +86,9 @@ function toView(state: unknown, mySessionId: string, myRole: RoleType | null): R
     if (typeof (rawPlayers as { forEach?: unknown }).forEach === "function") {
       (rawPlayers as Map<string, Record<string, unknown>>).forEach(mapper);
     } else if (typeof rawPlayers === "object") {
-      for (const [id, p] of Object.entries(rawPlayers as Record<string, unknown>)) {
+      for (const [id, p] of Object.entries(
+        rawPlayers as Record<string, unknown>,
+      )) {
         mapper(p as Record<string, unknown>, id);
       }
     }
@@ -76,8 +100,11 @@ function toView(state: unknown, mySessionId: string, myRole: RoleType | null): R
   const mf = me?.floor ?? 0;
 
   const roomsView: RoomStateView["roomsView"] = {};
+  const evidenceView: RoomStateView["evidenceView"] = {};
   for (const roomId of getAllRoomIds()) {
-    roomsView[roomId] = isInsideRoom(mx, mf, roomId) ? readRoomState(s.rooms, roomId) : null;
+    const inside = isInsideRoom(mx, mf, roomId);
+    roomsView[roomId] = inside ? readRoomState(s.rooms, roomId) : null;
+    evidenceView[roomId] = readEvidence(s.rooms, roomId);
   }
 
   const elevatorsView: RoomStateView["elevatorsView"] = {
@@ -87,9 +114,13 @@ function toView(state: unknown, mySessionId: string, myRole: RoleType | null): R
 
   const phase = (s.phase as RoomStateView["phase"]) ?? "waiting";
   const hostSessionId = (s.hostSessionId as string) ?? "";
-  const shiftEndsAt = typeof s.shiftEndsAt === "number" && s.shiftEndsAt > 0 ? s.shiftEndsAt : null;
+  const shiftEndsAt =
+    typeof s.shiftEndsAt === "number" && s.shiftEndsAt > 0
+      ? s.shiftEndsAt
+      : null;
   const winner = normalizeWinner(s.winner);
   const traitorReveal = normalizeTraitorReveal(s.traitorReveal);
+  const recapEvents = readRecapEvents(s.recapEvents);
 
   return {
     players,
@@ -99,10 +130,81 @@ function toView(state: unknown, mySessionId: string, myRole: RoleType | null): R
     myRole,
     myFloor,
     roomsView,
+    evidenceView,
     elevatorsView,
+    coveragePercent:
+      typeof s.coveragePercent === "number" ? s.coveragePercent : 0,
     shiftEndsAt,
     winner,
     traitorReveal,
+    recapEvents,
+  };
+}
+
+function readRecapEvents(value: unknown): RoomStateView["recapEvents"] {
+  if (!value || typeof value !== "object") return [];
+  const entries: unknown[] = [];
+  if (typeof (value as { forEach?: unknown }).forEach === "function") {
+    (value as { forEach: (cb: (entry: unknown) => void) => void }).forEach(
+      (entry) => entries.push(entry),
+    );
+  } else if (Array.isArray(value)) {
+    entries.push(...value);
+  }
+  return entries.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const event = entry as Record<string, unknown>;
+    if (typeof event.type !== "string" || typeof event.timestamp !== "number") {
+      return [];
+    }
+    return [
+      {
+        type: event.type,
+        actorSessionId:
+          typeof event.actorSessionId === "string" ? event.actorSessionId : "",
+        targetSessionId:
+          typeof event.targetSessionId === "string"
+            ? event.targetSessionId
+            : "",
+        roomId: typeof event.roomId === "string" ? event.roomId : "",
+        timestamp: event.timestamp,
+        valid: event.valid === true,
+        wasTargetSaboteur: event.wasTargetSaboteur === true,
+        crimeOccurred: event.crimeOccurred === true,
+      },
+    ];
+  });
+}
+
+function readEvidence(
+  rooms: unknown,
+  roomId: string,
+): NonNullable<RoomStateView["evidenceView"]>[string] {
+  const entry = lookupMapLike(rooms ?? {}, roomId);
+  if (!entry || typeof entry !== "object") {
+    return {
+      card: { present: false, text: "" },
+      freshness: null,
+      trashedAtTime: 0,
+    };
+  }
+  const value = entry as {
+    doorCard?: { present?: unknown; text?: unknown };
+    freshness?: unknown;
+    trashedAtTime?: unknown;
+  };
+  const freshness =
+    value.freshness === "fresh" || value.freshness === "settled"
+      ? value.freshness
+      : null;
+  return {
+    card: {
+      present: value.doorCard?.present === true,
+      text: typeof value.doorCard?.text === "string" ? value.doorCard.text : "",
+    },
+    freshness,
+    trashedAtTime:
+      typeof value.trashedAtTime === "number" ? value.trashedAtTime : 0,
   };
 }
 
@@ -112,10 +214,15 @@ function readRoomState(rooms: unknown, roomId: string): RoomStateType | null {
   if (!entry || typeof entry !== "object") return null;
   const state = (entry as { state?: unknown }).state;
   const allowed = ["clean", "prepped", "trashed"] as const;
-  return allowed.includes(state as RoomStateType) ? (state as RoomStateType) : null;
+  return allowed.includes(state as RoomStateType)
+    ? (state as RoomStateType)
+    : null;
 }
 
-function readElevator(elevators: unknown, shaft: ElevatorShaft): { floor: number; state: ElevatorStatus } {
+function readElevator(
+  elevators: unknown,
+  shaft: ElevatorShaft,
+): { floor: number; state: ElevatorStatus } {
   if (!elevators || typeof elevators !== "object") {
     return { floor: 0, state: "idle" };
   }
@@ -127,12 +234,17 @@ function readElevator(elevators: unknown, shaft: ElevatorShaft): { floor: number
   const allowed = ["idle", "arriving", "boarding"] as const;
   return {
     floor: (e as { floor?: number }).floor ?? 0,
-    state: allowed.includes(state as ElevatorStatus) ? (state as ElevatorStatus) : "idle",
+    state: allowed.includes(state as ElevatorStatus)
+      ? (state as ElevatorStatus)
+      : "idle",
   };
 }
 
 function lookupMapLike(container: object, key: string): unknown {
-  const c = container as Record<string, unknown> & { get?: (k: string) => unknown; has?: (k: string) => boolean };
+  const c = container as Record<string, unknown> & {
+    get?: (k: string) => unknown;
+    has?: (k: string) => boolean;
+  };
   if (typeof c.get === "function") {
     return c.get(key);
   }
@@ -144,7 +256,9 @@ function normalizeWinner(value: unknown): RoleType | null {
   return null;
 }
 
-function normalizeTraitorReveal(value: unknown): { sessionId: string; name: string } | null {
+function normalizeTraitorReveal(
+  value: unknown,
+): { sessionId: string; name: string } | null {
   if (!value || typeof value !== "object") return null;
   const v = value as { sessionId?: unknown; name?: unknown };
   if (typeof v.sessionId === "string" && typeof v.name === "string") {
@@ -155,7 +269,11 @@ function normalizeTraitorReveal(value: unknown): { sessionId: string; name: stri
 
 function mapServerError(reasonOrMessage: string): ClientEvent {
   const msg = reasonOrMessage ?? "";
-  if (msg === "need-4-players" || msg === "not-saboteur" || msg === "wrong-state") {
+  if (
+    msg === "need-4-players" ||
+    msg === "not-saboteur" ||
+    msg === "wrong-state"
+  ) {
     return { type: "rejected", reason: msg };
   }
   return { type: "error", message: msg, reason: msg };
@@ -165,7 +283,11 @@ function classifyJoinError(err: unknown): ClientEvent {
   const msg = (err as { message?: string })?.message ?? String(err);
   if (msg.includes("full")) return { type: "rejected", reason: "full" };
   if (msg.includes("bad-name")) return { type: "rejected", reason: "bad-name" };
-  if (msg.includes("not-found") || msg.includes("room not found") || msg.includes("not found")) {
+  if (
+    msg.includes("not-found") ||
+    msg.includes("room not found") ||
+    msg.includes("not found")
+  ) {
     return { type: "rejected", reason: "not-found" };
   }
   // colyseus MatchMakeError may have code 421?
@@ -201,7 +323,9 @@ export class ColyseusGameClient implements GameClient {
       this.emitState();
     };
     // colyseus Room.onStateChange is callable + has .remove etc. Use any to stay decoupled.
-    (room.onStateChange as unknown as (cb: (state: unknown) => void) => void)(stateCb);
+    (room.onStateChange as unknown as (cb: (state: unknown) => void) => void)(
+      stateCb,
+    );
 
     const errorCb = (code: number, message?: string): void => {
       const msg = message ?? `error ${code}`;
@@ -211,7 +335,11 @@ export class ColyseusGameClient implements GameClient {
         this.emitEvent({ type: "rejected", reason });
       }
     };
-    (room.onError as unknown as (cb: (code: number, message?: string) => void) => void)(errorCb);
+    (
+      room.onError as unknown as (
+        cb: (code: number, message?: string) => void,
+      ) => void
+    )(errorCb);
 
     const leaveCb = (code: number): void => {
       this.emitEvent({ type: "left", code });
@@ -219,7 +347,12 @@ export class ColyseusGameClient implements GameClient {
     (room.onLeave as unknown as (cb: (code: number) => void) => void)(leaveCb);
 
     // private role message
-    (room.onMessage as unknown as (type: string, cb: (payload: unknown) => void) => void)("role", (payload: unknown) => {
+    (
+      room.onMessage as unknown as (
+        type: string,
+        cb: (payload: unknown) => void,
+      ) => void
+    )("role", (payload: unknown) => {
       const p = payload as { role?: string };
       if (p.role === "staff" || p.role === "saboteur") {
         this.privateRole = p.role as RoleType;
@@ -228,10 +361,43 @@ export class ColyseusGameClient implements GameClient {
     });
 
     // server error messages
-    (room.onMessage as unknown as (type: string, cb: (payload: unknown) => void) => void)("error", (payload: unknown) => {
+    (
+      room.onMessage as unknown as (
+        type: string,
+        cb: (payload: unknown) => void,
+      ) => void
+    )("error", (payload: unknown) => {
       const p = payload as { reason?: string; message?: string };
       const reason = p.reason ?? p.message ?? "server-error";
       this.emitEvent(mapServerError(reason));
+    });
+
+    (
+      room.onMessage as unknown as (
+        type: string,
+        cb: (payload: unknown) => void,
+      ) => void
+    )("sabotageEvent", (payload: unknown) => {
+      if (!payload || typeof payload !== "object") return;
+      const event = payload as {
+        roomId?: unknown;
+        position?: { x?: unknown; y?: unknown };
+        timestamp?: unknown;
+      };
+      if (
+        typeof event.roomId === "string" &&
+        typeof event.position?.x === "number" &&
+        typeof event.position?.y === "number" &&
+        typeof event.timestamp === "number"
+      ) {
+        this.emitEvent({
+          type: "sabotage",
+          roomId: event.roomId,
+          x: event.position.x,
+          y: event.position.y,
+          timestamp: event.timestamp,
+        });
+      }
     });
 
     // emit initial state if already present
@@ -261,18 +427,28 @@ export class ColyseusGameClient implements GameClient {
   }
 
   async createRoom(): Promise<string> {
-    if (!this.pendingName) throw new Error("not-connected: call connect() first");
+    if (!this.pendingName)
+      throw new Error("not-connected: call connect() first");
     if (!this.client) this.client = new Client(getEndpoint());
     try {
-      const room = await this.client.joinOrCreate<unknown>("hotel", { name: this.pendingName });
+      const room = await this.client.joinOrCreate<unknown>("hotel", {
+        name: this.pendingName,
+      });
       this.wireRoom(room);
       // ensure initial emission after wire (state may arrive async, but also try now)
-      const view = toView((room as unknown as { state: unknown }).state, room.sessionId, this.privateRole);
+      const view = toView(
+        (room as unknown as { state: unknown }).state,
+        room.sessionId,
+        this.privateRole,
+      );
       if (view) {
         this.lastView = view;
         for (const cb of this.stateCbs) cb(view);
       }
-      const rid = (room as unknown as { roomId: string; id: string }).roomId ?? (room as unknown as { id: string }).id ?? "";
+      const rid =
+        (room as unknown as { roomId: string; id: string }).roomId ??
+        (room as unknown as { id: string }).id ??
+        "";
       return rid;
     } catch (err) {
       const ev = classifyJoinError(err);
@@ -282,13 +458,20 @@ export class ColyseusGameClient implements GameClient {
   }
 
   async joinByCode(code: RoomCode): Promise<void> {
-    if (!this.pendingName) throw new Error("not-connected: call connect() first");
+    if (!this.pendingName)
+      throw new Error("not-connected: call connect() first");
     const filtered = code.trim().toUpperCase();
     if (!this.client) this.client = new Client(getEndpoint());
     try {
-      const room = await this.client.joinById<unknown>(filtered, { name: this.pendingName });
+      const room = await this.client.joinById<unknown>(filtered, {
+        name: this.pendingName,
+      });
       this.wireRoom(room);
-      const view = toView((room as unknown as { state: unknown }).state, room.sessionId, this.privateRole);
+      const view = toView(
+        (room as unknown as { state: unknown }).state,
+        room.sessionId,
+        this.privateRole,
+      );
       if (view) {
         this.lastView = view;
         for (const cb of this.stateCbs) cb(view);
@@ -314,6 +497,10 @@ export class ColyseusGameClient implements GameClient {
 
   rideElevator(shaft: ElevatorShaft, destFloor: number): void {
     this.ensureRoomSend("rideElevator", { shaft, destFloor });
+  }
+
+  accuse(targetSessionId: string): void {
+    this.ensureRoomSend("accusation", { targetSessionId });
   }
 
   startChannel(type: ChannelType, roomId: string): void {
@@ -368,7 +555,9 @@ export class ColyseusGameClient implements GameClient {
         // ignore
       }
       try {
-        (this.room as unknown as { removeAllListeners?: () => void }).removeAllListeners?.();
+        (
+          this.room as unknown as { removeAllListeners?: () => void }
+        ).removeAllListeners?.();
       } catch {
         // ignore
       }

@@ -62,6 +62,15 @@ describe("PRD §7 tuning constants (V-2)", () => {
     expect(RUSTLE_RANGE_TILES).toBe(3);
   });
 
+  it("tuning constants m2", () => {
+    expect(FRESHNESS_WINDOW_MS).toBe(75_000);
+    expect(RUSTLE_RANGE_TILES).toBe(3);
+  });
+
+  it("tuning constants m3", () => {
+    expect(ACCUSATION_RANGE_TILES).toBe(2);
+  });
+
   it("tile and hallway free variables exist with plan values", () => {
     expect(TILE_SIZE_PX).toBe(32);
     expect(HALLWAY_MIN_X).toBe(96);

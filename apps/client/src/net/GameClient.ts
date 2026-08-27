@@ -14,6 +14,7 @@ import type {
   Phase,
   RoleType,
   RoomStateType,
+  TrashFreshness,
 } from "@grandhotel/shared";
 
 export type {
@@ -23,6 +24,7 @@ export type {
   Phase,
   RoleType,
   RoomStateType,
+  TrashFreshness,
 } from "@grandhotel/shared";
 
 export interface RoomStateView {
@@ -32,6 +34,8 @@ export interface RoomStateView {
     colorIndex: number;
     x: number;
     floor: number;
+    fired: boolean;
+    spectator: boolean;
   }>;
   phase: Phase;
   mySessionId: SessionId;
@@ -39,15 +43,44 @@ export interface RoomStateView {
   myRole: RoleType | null;
   myFloor: number;
   roomsView: Record<string, RoomStateType | null>;
-  elevatorsView: Record<ElevatorShaft, { floor: number; state: ElevatorStatus }>;
+  evidenceView?: Record<
+    string,
+    {
+      card: { present: boolean; text: string };
+      freshness: TrashFreshness;
+      trashedAtTime: number;
+    }
+  >;
+  elevatorsView: Record<
+    ElevatorShaft,
+    { floor: number; state: ElevatorStatus }
+  >;
+  coveragePercent?: number;
   shiftEndsAt: number | null;
   winner: RoleType | null;
   traitorReveal: { sessionId: SessionId; name: string } | null;
+  recapEvents: Array<{
+    type: string;
+    actorSessionId: string;
+    targetSessionId: string;
+    roomId: string;
+    timestamp: number;
+    valid: boolean;
+    wasTargetSaboteur: boolean;
+    crimeOccurred: boolean;
+  }>;
 }
 
 export type ClientEvent =
   | { type: "rejected"; reason: string }
   | { type: "error"; message: string; reason?: string }
+  | {
+      type: "sabotage";
+      roomId: string;
+      x: number;
+      y: number;
+      timestamp: number;
+    }
   | { type: "left"; code?: number };
 
 export type Unsubscribe = () => void;
@@ -62,6 +95,7 @@ export interface GameClient {
   startRound(): void;
   callElevator(shaft: ElevatorShaft): void;
   rideElevator(shaft: ElevatorShaft, destFloor: number): void;
+  accuse(targetSessionId: SessionId): void;
   startChannel(type: ChannelType, roomId: string): void;
   cancelChannel(): void;
   onState(cb: (s: RoomStateView) => void): Unsubscribe;

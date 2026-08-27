@@ -36,6 +36,13 @@ export class PlayerState extends Schema {
   @type("string")
   activeChannel: string | null = null;
 
+  /** M3 — fired players remain visible as read-only spectators. */
+  @type("boolean")
+  fired = false;
+
+  @type("boolean")
+  spectator = false;
+
   /** M1 — channel timer placeholder (server uses Maps, not schema). */
   channelTimer?: number;
 }
@@ -46,6 +53,16 @@ export type RoleType = "staff" | "saboteur";
 // ── Room data ─────────────────────────────────────────────────────────────────
 
 export type RoomStateType = "clean" | "prepped" | "trashed";
+
+export type TrashFreshness = "fresh" | "settled" | null;
+
+export class DoorCard extends Schema {
+  @type("boolean")
+  present = false;
+
+  @type("string")
+  text = "";
+}
 
 export class RoomData extends Schema {
   @type("string")
@@ -62,6 +79,18 @@ export class RoomData extends Schema {
 
   @type("string")
   state: RoomStateType = "clean";
+
+  /** M2 — permanent hallway evidence card. */
+  @type(DoorCard)
+  doorCard = new DoorCard();
+
+  /** M2 — server timestamp of the latest sabotage, or 0 when never trashed. */
+  @type("number")
+  trashedAtTime = 0;
+
+  /** M2 — projection hint for interior observers; derived from trashedAtTime. */
+  @type("string")
+  freshness: TrashFreshness = null;
 }
 
 // ── Elevator ──────────────────────────────────────────────────────────────────
@@ -93,6 +122,36 @@ export class TraitorReveal extends Schema {
 
   @type("string")
   name = "";
+}
+
+/** M3 — authoritative event projected into the results recap. */
+export class RecapEvent extends Schema {
+  @type("string")
+  type = "";
+
+  @type("string")
+  actorSessionId = "";
+
+  @type("string")
+  targetSessionId = "";
+
+  @type("string")
+  roomId = "";
+
+  @type("string")
+  shaft = "";
+
+  @type("number")
+  timestamp = 0;
+
+  @type("boolean")
+  valid = false;
+
+  @type("boolean")
+  wasTargetSaboteur = false;
+
+  @type("boolean")
+  crimeOccurred = false;
 }
 
 // ── Phase ─────────────────────────────────────────────────────────────────────
@@ -157,4 +216,12 @@ export class RoomState extends Schema {
   /** M1 — coverage ratio prepped/total, 0 until computed */
   @type("number")
   coverage = 0;
+
+  /** M2 — integer HUD projection, updated by the server. */
+  @type("number")
+  coveragePercent = 0;
+
+  /** M3 — chronological server-authoritative round recap. */
+  @type([RecapEvent])
+  recapEvents = new ArraySchema<RecapEvent>();
 }
