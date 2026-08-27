@@ -1,9 +1,22 @@
 import { Client } from "colyseus.js";
 import type { Room } from "colyseus.js";
+import { createRequire } from "module";
 import { RoleMsgSchema } from "@grandhotel/shared";
 import type { RoleMsg, RoomData } from "@grandhotel/shared";
+import type { HotelRoom } from "../../../apps/server/src/rooms/HotelRoom.js";
 import { spawnServer } from "./spawn.js";
 import type { SpawnedServer } from "./spawn.js";
+
+const require = createRequire(import.meta.url);
+const colyseusPkg = require("colyseus") as {
+  matchMaker: {
+    getRoomById: (roomId: string) => HotelRoom | undefined;
+  };
+};
+
+export function getServerRoom(roomId: string): HotelRoom | undefined {
+  return colyseusPkg.matchMaker.getRoomById(roomId);
+}
 
 export type HarnessClient = {
   name: string;
@@ -424,6 +437,9 @@ export type PlayerSnapshot = {
   colorIndex: number;
   x: number;
   floor: number;
+  fired: boolean;
+  spectator: boolean;
+  activeChannel: string | null;
 };
 
 /** A single player as observed in a client's replicated state. */
@@ -433,10 +449,31 @@ export function getPlayerState(c: HarnessClient, sessionId: string): PlayerSnaps
   const raw = state.players as unknown as Map<string, PlayerSnapshot>;
   if (raw && typeof raw.get === "function") {
     const p = raw.get(sessionId);
-    return p ?? null;
+    if (!p) return null;
+    return {
+      sessionId: p.sessionId ?? sessionId,
+      name: p.name,
+      colorIndex: p.colorIndex,
+      x: p.x,
+      floor: p.floor,
+      fired: Boolean(p.fired),
+      spectator: Boolean(p.spectator),
+      activeChannel: p.activeChannel ?? null,
+    };
   }
   const obj = state.players as unknown as Record<string, PlayerSnapshot>;
-  return obj[sessionId] ?? null;
+  const p = obj?.[sessionId];
+  if (!p) return null;
+  return {
+    sessionId: p.sessionId ?? sessionId,
+    name: p.name,
+    colorIndex: p.colorIndex,
+    x: p.x,
+    floor: p.floor,
+    fired: Boolean(p.fired),
+    spectator: Boolean(p.spectator),
+    activeChannel: p.activeChannel ?? null,
+  };
 }
 
 export type ElevatorSnapshot = {
@@ -560,4 +597,109 @@ export async function waitForPlayerFloor(
     await new Promise<void>((r) => setTimeout(r, 80));
   }
   throw new Error(`waitForPlayerFloor: timeout waiting for ${sessionId} on floor ${floor}`);
+}
+
+/** Calls an elevator shaft. */
+export function callElevator(c: HarnessClient, shaft: "A" | "B"): void {
+  if (!c.room) throw new Error("callElevator: client not in room");
+  c.room.send("callElevator", { shaft });
+}
+
+/** Rides an elevator shaft to a destination floor. */
+export function rideElevator(c: HarnessClient, shaft: "A" | "B", destFloor: number): void {
+  if (!c.room) throw new Error("rideElevator: client not in room");
+  c.room.send("rideElevator", { shaft, destFloor });
+}
+
+/** Sends an accusation against a target player sessionId. */
+export function sendAccusation(c: HarnessClient, targetSessionId: string): void {
+  if (!c.room) throw new Error("sendAccusation: client not in room");
+  c.room.send("accusation", { targetSessionId });
+}
+
+export type RecapEventSnapshot = {
+  type: string;
+  actorSessionId: string;
+  targetSessionId: string;
+  roomId: string;
+  shaft: string;
+  timestamp: number;
+  valid: boolean;
+  wasTargetSaboteur: boolean;
+  crimeOccurred: boolean;
+};
+
+/** All recap events as observed in a client's replicated state. */
+export function getRecapEvents(c: HarnessClient): RecapEventSnapshot[] {
+  if (!c.room) return [];
+  const state = (c.room as unknown as { state: { recapEvents?: unknown } }).state;
+  if (!state?.recapEvents) return [];
+  const out: RecapEventSnapshot[] = [];
+  const raw = state.recapEvents as unknown as {
+    forEach?: (cb: (ev: RecapEventSnapshot) => void) => void;
+    length?: number;
+    [index: number]: RecapEventSnapshot;
+  };
+  if (typeof raw.forEach === "function") {
+    raw.forEach((ev) => {
+      out.push({
+        type: ev.type,
+        actorSessionId: ev.actorSessionId,
+        targetSessionId: ev.targetSessionId,
+        roomId: ev.roomId,
+        shaft: ev.shaft,
+        timestamp: ev.timestamp,
+        valid: Boolean(ev.valid),
+        wasTargetSaboteur: Boolean(ev.wasTargetSaboteur),
+        crimeOccurred: Boolean(ev.crimeOccurred),
+      });
+    });
+  } else if (Array.isArray(raw)) {
+    for (const ev of raw) {
+      out.push({
+        type: ev.type,
+        actorSessionId: ev.actorSessionId,
+        targetSessionId: ev.targetSessionId,
+        roomId: ev.roomId,
+        shaft: ev.shaft,
+        timestamp: ev.timestamp,
+        valid: Boolean(ev.valid),
+        wasTargetSaboteur: Boolean(ev.wasTargetSaboteur),
+        crimeOccurred: Boolean(ev.crimeOccurred),
+      });
+    }
+  }
+  return out;
+}
+
+/** Polls until the replicated recapEvents array contains at least `minCount` events. */
+export async function waitForRecapEvents(
+  c: HarnessClient,
+  minCount: number,
+  timeoutMs = 8000,
+): Promise<RecapEventSnapshot[]> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const events = getRecapEvents(c);
+    if (events.length >= minCount) return events;
+    await new Promise<void>((r) => setTimeout(r, 80));
+  }
+  throw new Error(
+    `waitForRecapEvents: timeout waiting for ${minCount} events (got ${getRecapEvents(c).length})`,
+  );
+}
+
+/** Polls until the player's replicated state shows fired === true. */
+export async function waitForPlayerFired(
+  c: HarnessClient,
+  sessionId: string,
+  timeoutMs = 6000,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const p = getPlayerState(c, sessionId);
+    if (p && p.fired) return;
+    await new Promise<void>((r) => setTimeout(r, 80));
+  }
+  throw new Error(`waitForPlayerFired: timeout waiting for player ${sessionId} to be fired`);
 }

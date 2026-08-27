@@ -5,6 +5,7 @@ import { filterCodeInput, initialState, uiReducer } from "./ui/reducer.js";
 import { renderOverlay } from "./ui/screens.js";
 import { Interpolator } from "./movement/interpolate.js";
 import {
+  ACCUSATION_RANGE_TILES,
   CHANNEL_DURATIONS,
   CLIENT_INPUT_SEND_HZ,
   PLAYER_SPEED_PX_S,
@@ -38,6 +39,50 @@ type ActiveChannel = {
 };
 let channelActive: ActiveChannel | null = null;
 let channelKeyHeld = false;
+
+type ActiveAccusation = {
+  targetId: string;
+  targetName: string;
+  startAt: number;
+  duration: number;
+};
+let accusationActive: ActiveAccusation | null = null;
+let accusationKeyHeld = false;
+
+function isFiredOrSpectator(view: RoomStateView | null): boolean {
+  if (!view) return false;
+  const me = view.players.find((p) => p.id === view.mySessionId);
+  return me?.fired === true || me?.spectator === true;
+}
+
+function clearAccusationActive(): void {
+  accusationActive = null;
+  accusationKeyHeld = false;
+}
+
+function getNearbyAccusationTargets(
+  view: RoomStateView,
+  localX: number,
+  localFloor: number,
+): Array<{ id: string; name: string; x: number }> {
+  const me = view.players.find((p) => p.id === view.mySessionId);
+  if (!me || me.fired || me.spectator || view.myRole !== "staff") return [];
+  const maxRangePx = ACCUSATION_RANGE_TILES * TILE_SIZE_PX;
+  return view.players
+    .filter(
+      (p) =>
+        p.id !== me.id &&
+        !p.fired &&
+        !p.spectator &&
+        p.floor === localFloor &&
+        Math.abs(p.x - localX) <= maxRangePx,
+    )
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      x: p.x,
+    }));
+}
 
 function getOverlay(): HTMLElement | null {
   if (typeof document === "undefined") return null;
@@ -96,7 +141,10 @@ async function ensureGameStarted(view: RoomStateView): Promise<void> {
     const sceneInstance = new HallScene() as HallSceneType;
     sceneInstance.setLocalColorIndex(myColor);
     sceneInstance.onElevatorCall((shaft) => {
-      if (!resultsFrozen) client.callElevator(shaft);
+      const currentView = uiState.screen === "inRoom" ? uiState.view : null;
+      if (!resultsFrozen && !isFiredOrSpectator(currentView)) {
+        client.callElevator(shaft);
+      }
     });
 
     // Phaser will mount canvas into #app (960×540 fits lobby + 3 guest floors)
@@ -107,7 +155,7 @@ async function ensureGameStarted(view: RoomStateView): Promise<void> {
       height: 540,
       backgroundColor: "#bbbbbb",
       pixelArt: true,
-      scene: sceneInstance as unknown as Phaser.Scene,
+      scene: [sceneInstance as unknown as Phaser.Scene],
     });
     hallScene = sceneInstance;
 
@@ -116,6 +164,8 @@ async function ensureGameStarted(view: RoomStateView): Promise<void> {
     inputTimer = setInterval(() => {
       if (!hallScene) return;
       if (resultsFrozen) return;
+      const currentView = uiState.screen === "inRoom" ? uiState.view : null;
+      if (isFiredOrSpectator(currentView)) return;
       const dir = hallScene.consumeInputDir();
       if (dir !== 0) {
         const dx = (dir * PLAYER_SPEED_PX_S) / CLIENT_INPUT_SEND_HZ;
@@ -151,6 +201,26 @@ async function ensureGameStarted(view: RoomStateView): Promise<void> {
         }
       }
 
+      // Out of range cancels an active accusation hold
+      if (accusationActive && !resultsFrozen) {
+        if (view) {
+          const targets = getNearbyAccusationTargets(
+            view,
+            hallScene.getLocalX(),
+            hallScene.getLocalFloor(),
+          );
+          if (!targets.some((t) => t.id === accusationActive?.targetId)) {
+            clearAccusationActive();
+            const bar = getChannelBar();
+            if (bar) bar.hidden = true;
+          }
+        } else {
+          clearAccusationActive();
+          const bar = getChannelBar();
+          if (bar) bar.hidden = true;
+        }
+      }
+
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
@@ -173,6 +243,23 @@ function updateChannelBar(now: number): void {
   const fill = getChannelFill();
   const label = getChannelLabel();
   if (!bar || !fill || !label) return;
+
+  if (accusationActive) {
+    const max = accusationActive.duration;
+    const elapsed = now - accusationActive.startAt;
+    const pct = Math.max(0, Math.min(100, (elapsed / max) * 100));
+    fill.style.width = `${pct}%`;
+    fill.style.background = "#e63946";
+    label.textContent = `ACCUSING ${accusationActive.targetName.toUpperCase()}... (HOLD E)`;
+    bar.hidden = false;
+    if (elapsed >= max) {
+      const targetId = accusationActive.targetId;
+      clearAccusationActive();
+      bar.hidden = true;
+      client.accuse(targetId);
+    }
+    return;
+  }
 
   if (!channelActive) {
     bar.hidden = true;
@@ -274,6 +361,9 @@ function syncLocalState(view: RoomStateView): void {
       client.cancelChannel();
       clearChannelActive();
     }
+    if (accusationActive) {
+      clearAccusationActive();
+    }
     hallScene.setFloor(view.myFloor);
   }
 }
@@ -310,7 +400,10 @@ function dispatch(action: UIAction): void {
   // Side-effects driven by InRoom view
   if (next.screen === "inRoom" && next.view) {
     resultsFrozen = next.view.phase === "results";
-    if (resultsFrozen) clearChannelActive();
+    if (resultsFrozen || isFiredOrSpectator(next.view)) {
+      clearChannelActive();
+      clearAccusationActive();
+    }
     void ensureGameStarted(next.view);
     syncLocalState(next.view);
     syncRoster(next.view);
@@ -361,19 +454,23 @@ const handlers = {
     client.startRound();
   },
   onCallElevator: (shaft: "A" | "B"): void => {
-    if (resultsFrozen) return;
+    const currentView = uiState.screen === "inRoom" ? uiState.view : null;
+    if (resultsFrozen || isFiredOrSpectator(currentView)) return;
     client.callElevator(shaft);
   },
   onRideElevator: (shaft: "A" | "B", destFloor: number): void => {
-    if (resultsFrozen) return;
+    const currentView = uiState.screen === "inRoom" ? uiState.view : null;
+    if (resultsFrozen || isFiredOrSpectator(currentView)) return;
     client.rideElevator(shaft, destFloor);
   },
   onAccuse: (targetSessionId: string): void => {
-    if (resultsFrozen) return;
+    const currentView = uiState.screen === "inRoom" ? uiState.view : null;
+    if (resultsFrozen || isFiredOrSpectator(currentView)) return;
     client.accuse(targetSessionId);
   },
   onStartChannel: (type: "prep" | "unprep" | "fake", roomId: string): void => {
-    if (resultsFrozen) return;
+    const currentView = uiState.screen === "inRoom" ? uiState.view : null;
+    if (resultsFrozen || isFiredOrSpectator(currentView)) return;
     // Mirror the keyboard hold path so the on-screen buttons also drive the
     // shared progress-bar overlay (real prep / fake prep / unprep).
     const now =
@@ -400,16 +497,41 @@ client.onEvent((ev) => {
   dispatch({ type: "clientEvent", event: ev });
 });
 
-// Keyboard hold actions (channels). Mirrors the on-screen channel controls.
+// Keyboard hold actions (channels and accusations). Mirrors the on-screen controls.
 function onKeyDown(e: KeyboardEvent): void {
-  if (channelKeyHeld) return;
+  if (channelKeyHeld || accusationKeyHeld) return;
   if (!hallScene) return;
   if (resultsFrozen) return;
   if (uiState.screen !== "inRoom") return;
   const view = uiState.view;
   if (!view || view.phase !== "playing") return;
+  if (isFiredOrSpectator(view)) return;
   if (e.repeat) return;
   if (e.key.toLowerCase() !== "e") return;
+
+  const now =
+    typeof performance !== "undefined" ? performance.now() : Date.now();
+
+  // Accusation priority if staff is within range of an eligible target
+  if (view.myRole === "staff") {
+    const targets = getNearbyAccusationTargets(
+      view,
+      hallScene.getLocalX(),
+      hallScene.getLocalFloor(),
+    );
+    if (targets.length > 0) {
+      const target = targets[0]!;
+      accusationKeyHeld = true;
+      accusationActive = {
+        targetId: target.id,
+        targetName: target.name,
+        startAt: now,
+        duration: 1000,
+      };
+      e.preventDefault();
+      return;
+    }
+  }
 
   const roomId = hallScene.getCurrentRoom();
   if (!roomId) return;
@@ -436,22 +558,31 @@ function onKeyDown(e: KeyboardEvent): void {
   if (!type) return;
 
   channelKeyHeld = true;
-  const now =
-    typeof performance !== "undefined" ? performance.now() : Date.now();
   channelActive = { roomId, type, startAt: now };
   client.startChannel(type, roomId);
   e.preventDefault();
 }
 
 function onKeyUp(e: KeyboardEvent): void {
-  if (!channelKeyHeld) return;
   if (e.key.toLowerCase() === "e") {
-    client.cancelChannel();
-    clearChannelActive();
+    if (accusationActive || accusationKeyHeld) {
+      clearAccusationActive();
+      const bar = getChannelBar();
+      if (bar) bar.hidden = true;
+    }
+    if (channelKeyHeld) {
+      client.cancelChannel();
+      clearChannelActive();
+    }
   }
 }
 
 function onWindowBlur(): void {
+  if (accusationActive || accusationKeyHeld) {
+    clearAccusationActive();
+    const bar = getChannelBar();
+    if (bar) bar.hidden = true;
+  }
   if (channelKeyHeld) {
     client.cancelChannel();
     clearChannelActive();

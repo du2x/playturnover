@@ -10,7 +10,7 @@ describe("server placeholder", () => {
   it("creates a game server with the websocket transport", () => {
     const { gameServer } = createGameServer();
     expect(gameServer.transport).toBeDefined();
-    expect(gameServer.transport.constructor?.name).toBe("WebSocketTransport");
+    expect(gameServer.transport?.constructor?.name).toBe("WebSocketTransport");
   });
 
   it("trivial passes", () => {

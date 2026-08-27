@@ -32,9 +32,7 @@ export const Room = colyseusPkg.Room as unknown as abstract new <T extends objec
 };
 export const Server = colyseusPkg.Server as unknown as new (options?: {
   server?: unknown;
-  transport?: {
-    constructor?: { name?: string };
-  };
+  transport?: unknown;
 }) => {
   transport?: { constructor?: { name?: string } };
   define: (name: string, room: unknown) => void;

@@ -64,6 +64,7 @@ export interface RoomStateView {
     actorSessionId: string;
     targetSessionId: string;
     roomId: string;
+    shaft?: string;
     timestamp: number;
     valid: boolean;
     wasTargetSaboteur: boolean;

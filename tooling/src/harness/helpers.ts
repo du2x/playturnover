@@ -22,6 +22,13 @@ export {
   waitForRoomState,
   waitForElevatorState,
   waitForPlayerFloor,
+  callElevator,
+  rideElevator,
+  sendAccusation,
+  getRecapEvents,
+  waitForRecapEvents,
+  waitForPlayerFired,
+  getServerRoom,
 } from "./clients.js";
 
 export type {
@@ -31,5 +38,6 @@ export type {
   RoomSnapshot,
   PlayerSnapshot,
   ElevatorSnapshot,
+  RecapEventSnapshot,
 } from "./clients.js";
 export type { SpawnedServer } from "./spawn.js";

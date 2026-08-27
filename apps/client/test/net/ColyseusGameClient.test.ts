@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+const { ClientMock } = vi.hoisted(() => ({
+  ClientMock: vi.fn(),
+}));
+
+vi.mock("colyseus.js", () => ({
+  Client: ClientMock,
+}));
+
 import { ColyseusGameClient } from "../../src/net/ColyseusGameClient.js";
 
 // Stub a minimal Room/Client for unit tests without Touching colyseus.js internals.
@@ -60,6 +69,17 @@ describe("ColyseusGameClient", () => {
     vi.unstubAllGlobals();
   });
 
+  it("uses the game server URL when the browser is on a Vite dev port", async () => {
+    ClientMock.mockClear();
+    vi.stubGlobal("window", { location: { origin: "http://localhost:5173" } });
+
+    const client = new ColyseusGameClient();
+    await client.connect("Dev");
+
+    expect(ClientMock).toHaveBeenCalledWith("http://localhost:2567");
+    expect(client.getCachedRole()).toBeNull();
+  });
+
   it("caches myRole from private 'role' message and reflects it in view", async () => {
     const room = makeFakeRoom("sess-a");
     const fake = makeFakeClient(room);
@@ -87,7 +107,7 @@ describe("ColyseusGameClient", () => {
     expect(last?.myFloor).toBe(0);
   });
 
-  it("sends startRound, callElevator, rideElevator, channelStart, channelCancel messages", async () => {
+  it("sends startRound, callElevator, rideElevator, accuse, channelStart, channelCancel messages", async () => {
     const room = makeFakeRoom("sess-b");
     const fake = makeFakeClient(room);
     const client = new ColyseusGameClient();
@@ -99,6 +119,7 @@ describe("ColyseusGameClient", () => {
     client.startRound();
     client.callElevator("A");
     client.rideElevator("B", 2);
+    client.accuse("target-xyz");
     client.startChannel("prep", "1-0");
     client.cancelChannel();
 
@@ -106,9 +127,88 @@ describe("ColyseusGameClient", () => {
       { type: "startRound", payload: {} },
       { type: "callElevator", payload: { shaft: "A" } },
       { type: "rideElevator", payload: { shaft: "B", destFloor: 2 } },
+      { type: "accusation", payload: { targetSessionId: "target-xyz" } },
       { type: "channelStart", payload: { type: "prep", roomId: "1-0" } },
       { type: "channelCancel", payload: {} },
     ]);
+  });
+
+  it("decodes fired and spectator player states, and gives spectators full-building visibility", async () => {
+    const room = makeFakeRoom("sess-spectator");
+    const fake = makeFakeClient(room);
+    const client = new ColyseusGameClient();
+    // @ts-expect-error private field injection for test
+    client.client = fake;
+    await client.connect("Spectator");
+    await client.createRoom();
+
+    room._setState({
+      players: new Map([
+        ["sess-spectator", { sessionId: "sess-spectator", name: "Spectator", colorIndex: 0, x: 100, floor: 0, fired: true, spectator: true }],
+        ["sess-other", { sessionId: "sess-other", name: "Active", colorIndex: 1, x: 200, floor: 1, fired: false, spectator: false }],
+      ]),
+      phase: "playing",
+      hostSessionId: "sess-spectator",
+      rooms: new Map([
+        ["1-0", { id: "1-0", floor: 1, xMin: 96, xMax: 184, state: "prepped" }],
+        ["2-3", { id: "2-3", floor: 2, xMin: 384, xMax: 472, state: "trashed" }],
+      ]),
+      elevators: new Map(),
+    });
+
+    const view = client.getLastView();
+    expect(view?.players[0]?.fired).toBe(true);
+    expect(view?.players[0]?.spectator).toBe(true);
+    expect(view?.players[1]?.fired).toBe(false);
+    expect(view?.players[1]?.spectator).toBe(false);
+
+    // Spectator is on floor 0 x=100 (lobby), but should have full building visibility of all room states
+    expect(view?.roomsView["1-0"]).toBe("prepped");
+    expect(view?.roomsView["2-3"]).toBe("trashed");
+    // All 24 rooms exist in roomsView
+    expect(Object.keys(view?.roomsView ?? {}).length).toBe(24);
+  });
+
+  it("decodes recapEvents array in results view", async () => {
+    const room = makeFakeRoom("sess-recap");
+    const fake = makeFakeClient(room);
+    const client = new ColyseusGameClient();
+    // @ts-expect-error private field injection for test
+    client.client = fake;
+    await client.connect("RecapTester");
+    await client.createRoom();
+
+    room._setState({
+      players: new Map([["sess-recap", { sessionId: "sess-recap", name: "RecapTester", colorIndex: 0, x: 100, floor: 0 }]]),
+      phase: "results",
+      hostSessionId: "sess-recap",
+      winner: "staff",
+      traitorReveal: { sessionId: "sess-sab", name: "Sab" },
+      recapEvents: [
+        { type: "prep", actorSessionId: "p1", targetSessionId: "", roomId: "1-0", shaft: "", timestamp: 1000, valid: true, wasTargetSaboteur: false, crimeOccurred: false },
+        { type: "call", actorSessionId: "p2", targetSessionId: "", roomId: "", shaft: "A", timestamp: 2000, valid: true, wasTargetSaboteur: false, crimeOccurred: false },
+        { type: "sabotage", actorSessionId: "sess-sab", targetSessionId: "", roomId: "1-1", shaft: "", timestamp: 3000, valid: true, wasTargetSaboteur: true, crimeOccurred: true },
+        { type: "accusation", actorSessionId: "p1", targetSessionId: "sess-sab", roomId: "", shaft: "", timestamp: 4000, valid: true, wasTargetSaboteur: true, crimeOccurred: true },
+      ],
+      rooms: new Map(),
+      elevators: new Map(),
+    });
+
+    const view = client.getLastView();
+    expect(view?.recapEvents.length).toBe(4);
+    expect(view?.recapEvents[0]).toEqual({
+      type: "prep",
+      actorSessionId: "p1",
+      targetSessionId: "",
+      roomId: "1-0",
+      shaft: undefined,
+      timestamp: 1000,
+      valid: true,
+      wasTargetSaboteur: false,
+      crimeOccurred: false,
+    });
+    expect(view?.recapEvents[1]?.shaft).toBe("A");
+    expect(view?.recapEvents[3]?.wasTargetSaboteur).toBe(true);
   });
 
   it("room observability: exposes state only when local player is inside", async () => {

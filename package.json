@@ -16,6 +16,7 @@
     "verify:m0": "bash scripts/verify-m0.sh",
     "verify:m1": "bash scripts/verify-m1.sh",
     "verify:m2": "bash scripts/verify-m2.sh",
+    "verify:m3": "bash scripts/verify-m3.sh",
     "validate:spec": "python3 scripts/validate-spec.py",
     "validate:plan": "python3 scripts/validate-plan.py",
     "validate:state": "python3 scripts/validate-state.py",

@@ -39,6 +39,54 @@ body {
   border: 1px solid #999;
   border-radius: 4px;
 }
+#overlay #screen-room {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+#overlay #screen-room > * {
+  pointer-events: auto;
+}
+#overlay #screen-room h2,
+#overlay #screen-room #phase-label,
+#overlay #screen-room #roster,
+#overlay #screen-room #floor-indicator,
+#overlay #screen-room #room-code,
+#overlay #screen-room #player-count-hint,
+#overlay #screen-room #host-start-btn,
+#overlay #screen-room #host-info,
+#overlay #screen-room #prompt,
+#overlay #screen-room #room-error {
+  background: rgba(255, 255, 255, 0.85);
+  padding: 4px 8px;
+  margin: 4px 8px;
+  border-radius: 4px;
+  display: inline-block;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+#overlay #screen-room #roster {
+  display: inline-flex;
+}
+#overlay #screen-room #elevator-controls {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 6px 10px;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+#overlay #screen-room #evidence-panel {
+  display: none;
+}
+#overlay #screen-room #room-states {
+  display: none;
+}
 #overlay h2,
 #overlay h3 {
   margin: 6px 0;
@@ -139,7 +187,7 @@ body {
   display: none !important;
 }
 
-/* Results banner v1 */
+/* Results banner */
 .results-overlay {
   position: absolute;
   inset: 0;
@@ -158,7 +206,10 @@ body {
   border-radius: 6px;
   text-align: center;
   border: 2px solid #888;
-  min-width: 280px;
+  min-width: 320px;
+  max-width: 600px;
+  max-height: 480px;
+  overflow-y: auto;
 }
 
 .results-title {
@@ -177,6 +228,87 @@ body {
 .results-traitor {
   font-size: 16px;
   font-family: monospace;
+  margin-bottom: 12px;
+}
+
+.recap-heading {
+  margin: 16px 0 8px;
+  font-size: 16px;
+  text-align: left;
+  border-bottom: 1px solid #ccc;
+  padding-bottom: 4px;
+}
+
+.recap-timeline {
+  text-align: left;
+  padding-left: 20px;
+  margin: 8px 0 0;
+  font-family: monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.recap-event {
+  margin: 4px 0;
+}
+
+.recap-event.recap-sabotage {
+  color: #b00020;
+}
+
+.recap-event.recap-catch,
+.recap-event.recap-walk-in {
+  color: #d97706;
+  font-weight: 600;
+}
+
+.recap-event.recap-accusation {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+.spectator-banner {
+  background: #1e293b;
+  color: #38bdf8;
+  padding: 6px 12px;
+  margin: 8px 0;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 13px;
+  text-align: center;
+  letter-spacing: 0.05em;
+  border: 1px solid #38bdf8;
+}
+
+.spectator-badge {
+  color: #888;
+  font-style: italic;
+}
+
+.accusation-controls {
+  margin: 8px 0;
+  padding: 8px;
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  border-radius: 4px;
+}
+
+.accusation-controls strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #991b1b;
+  font-size: 13px;
+}
+
+.accusation-btn {
+  background: #fee2e2 !important;
+  border-color: #ef4444 !important;
+  color: #991b1b !important;
+  font-weight: 600;
+}
+
+.accusation-btn:hover:not(:disabled) {
+  background: #fecaca !important;
 }
 
 /* HUD overlays */

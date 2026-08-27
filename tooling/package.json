@@ -11,10 +11,12 @@
     "smoke:local": "tsx src/smoke.ts --url http://localhost:2567",
     "smoke:remote": "tsx src/smoke.ts",
     "verify:m0": "echo 'verify:m0 not implemented in M0.1.1'",
-    "verify:m2": "bash ../../scripts/verify-m2.sh"
+    "verify:m2": "bash ../../scripts/verify-m2.sh",
+    "verify:m3": "bash ../../scripts/verify-m3.sh"
   },
   "dependencies": {
     "@colyseus/schema": "^2.0.37",
+    "@colyseus/ws-transport": "^0.15.3",
     "@grandhotel/server": "workspace:*",
     "@grandhotel/shared": "workspace:*",
     "colyseus": "^0.15.57",

@@ -32,16 +32,30 @@ function getEndpoint(): string {
   } catch {
     // ignore
   }
-  if (typeof window !== "undefined" && window.location?.origin) {
-    return window.location.origin;
-  }
-  // fallback for node/vitest
+
   const procEnv = (
     globalThis as unknown as {
       process?: { env?: Record<string, string | undefined> };
     }
   ).process?.env;
   if (procEnv?.VITE_GAME_URL) return procEnv.VITE_GAME_URL;
+
+  if (typeof window !== "undefined" && window.location?.origin) {
+    const origin = window.location.origin;
+    try {
+      const url = new URL(origin);
+      const isLocalViteDevPort =
+        (url.hostname === "localhost" ||
+          url.hostname === "127.0.0.1" ||
+          url.hostname === "0.0.0.0") &&
+        ["5173", "5174", "4173"].includes(url.port);
+      if (isLocalViteDevPort) return "http://localhost:2567";
+    } catch {
+      // ignore invalid origin strings
+    }
+    return origin;
+  }
+
   return "http://localhost:2567";
 }
 
@@ -98,12 +112,13 @@ function toView(
   const me = players.find((p) => p.id === mySessionId);
   const mx = me?.x ?? 0;
   const mf = me?.floor ?? 0;
+  const isSpectator = me?.spectator === true || me?.fired === true;
 
   const roomsView: RoomStateView["roomsView"] = {};
   const evidenceView: RoomStateView["evidenceView"] = {};
   for (const roomId of getAllRoomIds()) {
     const inside = isInsideRoom(mx, mf, roomId);
-    roomsView[roomId] = inside ? readRoomState(s.rooms, roomId) : null;
+    roomsView[roomId] = inside || isSpectator ? readRoomState(s.rooms, roomId) : null;
     evidenceView[roomId] = readEvidence(s.rooms, roomId);
   }
 
@@ -167,6 +182,10 @@ function readRecapEvents(value: unknown): RoomStateView["recapEvents"] {
             ? event.targetSessionId
             : "",
         roomId: typeof event.roomId === "string" ? event.roomId : "",
+        shaft:
+          typeof event.shaft === "string" && event.shaft
+            ? event.shaft
+            : undefined,
         timestamp: event.timestamp,
         valid: event.valid === true,
         wasTargetSaboteur: event.wasTargetSaboteur === true,

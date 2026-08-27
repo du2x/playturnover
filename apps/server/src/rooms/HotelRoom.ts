@@ -109,6 +109,9 @@ export class HotelRoom extends Room<RoomState> {
   private injectedClock?: Clock;
   private clockAdapter!: Clock;
   private saboteurHasCommittedCrime = false;
+  private telemetry = new TelemetryLogger();
+  private roundStartedAt = 0;
+  private undiscoveredCrimes = new Map<string, number>();
 
   constructor(clock?: Clock) {
     super();
@@ -342,7 +345,30 @@ export class HotelRoom extends Room<RoomState> {
 
     // walk-out cancels any active channel (R-9)
     this.checkWalkInCatch(client.sessionId);
+    this.checkDiscovery(client.sessionId);
     this.checkChannelBounds(client.sessionId);
+  }
+
+  private checkDiscovery(sessionId: string): void {
+    const player = this.state.players.get(sessionId);
+    if (!player || player.fired || player.spectator) return;
+    if (this.getRoleFor(sessionId) !== "staff") return;
+
+    for (const [roomId, crimeTime] of this.undiscoveredCrimes.entries()) {
+      if (isInsideRoom(player.x, player.floor, roomId)) {
+        const now = this.now();
+        const timeSinceCrimeMs = now - crimeTime;
+        this.undiscoveredCrimes.delete(roomId);
+        this.telemetry.log({
+          type: "discovery",
+          timestamp: now,
+          actorSessionId: sessionId,
+          roomId,
+          timeSinceCrimeMs,
+          crimeTimestamp: crimeTime,
+        });
+      }
+    }
   }
 
   private checkWalkInCatch(enteringSessionId: string): void {
@@ -357,6 +383,7 @@ export class HotelRoom extends Room<RoomState> {
         !saboteur.fired &&
         isInsideRoom(entering.x, entering.floor, channel.roomId)
       ) {
+        this.undiscoveredCrimes.delete(channel.roomId);
         this.recordEvent(
           "catch",
           enteringSessionId,
@@ -364,7 +391,8 @@ export class HotelRoom extends Room<RoomState> {
           channel.roomId,
           true,
           true,
-          this.saboteurHasCommittedCrime,
+          true,
+          "",
         );
         this.firePlayer(sessionId);
         this.endRound("staff");
@@ -420,6 +448,17 @@ export class HotelRoom extends Room<RoomState> {
     this.saboteurSessionId = saboteurSessionId;
     this.saboteurHasCommittedCrime = false;
     this.state.recapEvents.splice(0, this.state.recapEvents.length);
+    this.telemetry.clear();
+    this.undiscoveredCrimes.clear();
+    this.roundStartedAt = this.now();
+    this.telemetry.log({
+      type: "round_start",
+      timestamp: this.now(),
+      saboteurSessionId: saboteurSessionId ?? "",
+      playerCount: ids.length,
+      players: ids,
+      shiftEndsAt: endsAt,
+    });
     this.roleMap.clear();
     for (const [sid, role] of roleBySessionId) {
       this.roleMap.set(sid, role);
@@ -454,8 +493,10 @@ export class HotelRoom extends Room<RoomState> {
   private updateEvidence(): void {
     const now = this.now();
     let preppedCount = 0;
+    let trashedCount = 0;
     for (const room of this.state.rooms.values()) {
       if (room.state === "prepped") preppedCount += 1;
+      else if (room.state === "trashed") trashedCount += 1;
       if (room.trashedAtTime > 0) {
         room.freshness =
           now - room.trashedAtTime < FRESHNESS_WINDOW_MS ? "fresh" : "settled";
@@ -465,6 +506,18 @@ export class HotelRoom extends Room<RoomState> {
     }
     this.state.coverage = computeCoverage(preppedCount, ROOM_COUNT);
     this.state.coveragePercent = Math.floor(this.state.coverage * 100);
+
+    if (this.state.phase === "playing") {
+      this.telemetry.log({
+        type: "coverage_sample",
+        timestamp: now,
+        coverage: this.state.coverage,
+        coveragePercent: this.state.coveragePercent,
+        preppedCount,
+        trashedCount,
+        cleanCount: ROOM_COUNT - preppedCount - trashedCount,
+      });
+    }
   }
 
   /** Shared path for declaring the end of the round. */
@@ -492,6 +545,17 @@ export class HotelRoom extends Room<RoomState> {
         this.state.traitorReveal = null;
       }
     }
+
+    this.telemetry.log({
+      type: "round_end",
+      timestamp: this.now(),
+      winner,
+      traitorSessionId: this.saboteurSessionId ?? "",
+      traitorName: this.state.traitorReveal?.name ?? "",
+      coverage: this.state.coverage,
+      coveragePercent: this.state.coveragePercent,
+      durationMs: this.roundStartedAt ? this.now() - this.roundStartedAt : 0,
+    });
 
     this.cancel("shift");
     this.cancel("evidence");
@@ -596,6 +660,18 @@ export class HotelRoom extends Room<RoomState> {
     callElevator(runtime, client.sessionId, player.floor, now);
     this.syncElevatorCar(car, runtime);
 
+    this.recordEvent(
+      "call",
+      client.sessionId,
+      "",
+      "",
+      true,
+      this.getRoleFor(client.sessionId) === "saboteur",
+      false,
+      parsed.data.shaft,
+      { floor: player.floor },
+    );
+
     if (wasIdle && runtime.state === "arriving") {
       this.scheduleElevatorArrival(parsed.data.shaft);
     }
@@ -670,12 +746,24 @@ export class HotelRoom extends Room<RoomState> {
       const elevatorX = getElevatorX(car.shaft);
       for (const sessionId of riders) {
         const p = this.state.players.get(sessionId);
+        const fromFloor = p ? p.floor : 0;
         if (p) {
           p.floor = destFloor;
           p.x = elevatorX;
           // floor change via elevator cancels any active channel (R-9)
           this.cancelChannel(sessionId);
         }
+        this.recordEvent(
+          "ride",
+          sessionId,
+          "",
+          "",
+          true,
+          this.getRoleFor(sessionId) === "saboteur",
+          false,
+          car.shaft,
+          { fromFloor, destFloor },
+        );
       }
     }
 
@@ -757,6 +845,8 @@ export class HotelRoom extends Room<RoomState> {
     const parsed = ChannelCancelMsgSchema.safeParse(raw ?? {});
     if (!parsed.success) return;
     if (this.state.phase !== "playing") return;
+    const player = this.state.players.get(client.sessionId);
+    if (!player || player.fired || player.spectator) return;
     this.cancelChannel(client.sessionId);
   }
 
@@ -791,6 +881,7 @@ export class HotelRoom extends Room<RoomState> {
       correct,
       targetIsSaboteur,
       this.saboteurHasCommittedCrime,
+      "",
     );
     if (correct) {
       this.firePlayer(parsed.data.targetSessionId);
@@ -807,6 +898,13 @@ export class HotelRoom extends Room<RoomState> {
     this.cancelChannel(sessionId);
     player.fired = true;
     player.spectator = true;
+    for (const car of this.state.elevators.values()) {
+      const runtime = this.elevatorRuntime.get(car);
+      if (runtime) {
+        removeRiderFromCar(runtime, sessionId);
+        this.syncElevatorCar(car, runtime);
+      }
+    }
   }
 
   private recordEvent(
@@ -817,17 +915,33 @@ export class HotelRoom extends Room<RoomState> {
     valid = false,
     wasTargetSaboteur = false,
     crimeOccurred = false,
+    shaft = "",
+    extra: Record<string, unknown> = {},
   ): void {
     const event = new RecapEvent();
     event.type = type;
     event.actorSessionId = actorSessionId;
     event.targetSessionId = targetSessionId;
     event.roomId = roomId;
+    event.shaft = shaft;
     event.timestamp = this.now();
     event.valid = valid;
     event.wasTargetSaboteur = wasTargetSaboteur;
     event.crimeOccurred = crimeOccurred;
     this.state.recapEvents.push(event);
+
+    this.telemetry.log({
+      type: type as any,
+      timestamp: event.timestamp,
+      actorSessionId,
+      targetSessionId,
+      roomId,
+      shaft,
+      valid,
+      wasTargetSaboteur,
+      crimeOccurred,
+      ...extra,
+    });
   }
 
   private cancelChannel(sessionId: string): void {
@@ -869,12 +983,23 @@ export class HotelRoom extends Room<RoomState> {
     ) {
       room.doorCard.present = true;
       room.doorCard.text = "PREPPED";
+      this.recordEvent(
+        "prep",
+        sessionId,
+        "",
+        channel.roomId,
+        true,
+        false,
+        false,
+        "",
+      );
     } else if (channel.type === "unprep" && room.state === "trashed") {
       room.doorCard.present = true;
       room.doorCard.text = "TRASHED";
       room.trashedAtTime = this.now();
       room.freshness = "fresh";
       this.saboteurHasCommittedCrime = true;
+      this.undiscoveredCrimes.set(channel.roomId, this.now());
       this.recordEvent(
         "sabotage",
         sessionId,
@@ -883,6 +1008,7 @@ export class HotelRoom extends Room<RoomState> {
         true,
         true,
         true,
+        "",
       );
       this.broadcastSabotageEvent(channel.roomId, player);
     }
@@ -907,18 +1033,32 @@ export class HotelRoom extends Room<RoomState> {
   /**
    * Visibility filtering helper (R-10): returns the subset of room states that
    * should be observable to the given session id. Only rooms where the player is
-   * physically inside are included.
+   * physically inside are included, unless the player is a spectator/fired.
    */
   public getVisibleRooms(sessionId: string): Record<string, RoomStateType> {
     const player = this.state.players.get(sessionId);
     if (!player) return {};
     const visible: Record<string, RoomStateType> = {};
+    if (player.fired || player.spectator) {
+      for (const [id, room] of this.state.rooms.entries()) {
+        visible[id] = room.state;
+      }
+      return visible;
+    }
     for (const [id, room] of this.state.rooms.entries()) {
       if (isInsideRoom(player.x, player.floor, id)) {
         visible[id] = room.state;
       }
     }
     return visible;
+  }
+
+  public getTelemetryRecords(): TelemetryRecord[] {
+    return this.telemetry.getRecords();
+  }
+
+  public getTelemetryJsonl(): string {
+    return this.telemetry.toJsonl();
   }
 
   /** Exposed for server unit tests — not part of public API */

@@ -371,20 +371,86 @@ function renderResultsBanner(view: RoomStateView | null): HTMLElement | null {
       : "Saboteur reveal unavailable",
   });
 
+  const timelineHeading = createEl("h3", {
+    className: "recap-heading",
+    text: "Round Timeline",
+  });
+
   const timeline = createEl("ol", {
     id: "recap-timeline",
     className: "recap-timeline",
   });
-  for (const event of view.recapEvents) {
-    const detail = event.roomId || event.targetSessionId || "round";
-    timeline.append(
-      createEl("li", {
-        text: `${event.type.toUpperCase()} · ${detail} · ${new Date(event.timestamp).toLocaleTimeString()}`,
-      }),
-    );
+
+  const playerNames = new Map<string, string>();
+  for (const p of view.players) {
+    playerNames.set(p.id, p.name);
+  }
+  if (reveal) {
+    playerNames.set(reveal.sessionId, reveal.name);
   }
 
-  banner.append(title, traitorLine, timeline);
+  const getPlayerName = (id: string): string => {
+    if (!id) return "";
+    return playerNames.get(id) ?? id.slice(0, 6);
+  };
+
+  for (const event of view.recapEvents) {
+    const li = createEl("li", {
+      className: `recap-event recap-${event.type}`,
+    });
+    li.dataset.type = event.type;
+
+    let eventText = "";
+    const timeStr =
+      event.timestamp > 0
+        ? new Date(event.timestamp).toLocaleTimeString()
+        : "";
+    const actor = getPlayerName(event.actorSessionId);
+    const target = getPlayerName(event.targetSessionId);
+
+    switch (event.type) {
+      case "prep":
+        eventText = `PREP · ${actor} completed room ${event.roomId}`;
+        break;
+      case "unprep":
+      case "sabotage":
+        eventText = `SABOTAGE · ${actor || "Saboteur"} sabotaged room ${event.roomId}`;
+        break;
+      case "call":
+        eventText = `ELEVATOR CALL · ${actor} called Shaft ${event.shaft || "A"}`;
+        break;
+      case "ride":
+        eventText = `ELEVATOR RIDE · ${actor} rode Shaft ${event.shaft || "A"}`;
+        break;
+      case "catch":
+      case "walk-in":
+        eventText = `CAUGHT IN ACT · ${actor} caught ${target || "Saboteur"} in room ${event.roomId}`;
+        break;
+      case "accusation": {
+        const verdict = event.valid ? "CORRECT" : "WRONG";
+        eventText = `ACCUSATION · ${actor} accused ${target} (${verdict})`;
+        break;
+      }
+      default: {
+        const detail = event.roomId || target || actor || "round";
+        eventText = `${event.type.toUpperCase()} · ${detail}`;
+        break;
+      }
+    }
+
+    li.textContent = timeStr ? `${timeStr} · ${eventText}` : eventText;
+    timeline.append(li);
+  }
+
+  if (view.recapEvents.length === 0) {
+    const emptyLi = createEl("li", {
+      className: "recap-empty",
+      text: "No events recorded",
+    });
+    timeline.append(emptyLi);
+  }
+
+  banner.append(title, traitorLine, timelineHeading, timeline);
   return banner;
 }
 
@@ -411,6 +477,21 @@ function renderAccusations(
   });
   section.append(createEl("strong", { text: "Nearby staff review" }));
   for (const target of targets) {
+    let holdTimer: ReturnType<typeof setTimeout> | null = null;
+    const startHold = () => {
+      if (holdTimer) clearTimeout(holdTimer);
+      holdTimer = setTimeout(() => {
+        handlers.onAccuse(target.id);
+        holdTimer = null;
+      }, 1000);
+    };
+    const cancelHold = () => {
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      }
+    };
+
     const button = createButton(
       `Accuse ${target.name}`,
       () => {
@@ -421,8 +502,18 @@ function renderAccusations(
           handlers.onAccuse(target.id);
         }
       },
-      { id: `accuse-${target.id}` },
+      { id: `accuse-${target.id}`, className: "accusation-btn" },
     );
+
+    button.addEventListener("mousedown", startHold);
+    button.addEventListener("mouseup", cancelHold);
+    button.addEventListener("mouseleave", cancelHold);
+    button.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      startHold();
+    });
+    button.addEventListener("touchend", cancelHold);
+
     section.append(button);
   }
   container.append(section);
@@ -448,14 +539,29 @@ function renderRoomScreen(
   const me = state.view?.players.find(
     (player) => player.id === state.view?.mySessionId,
   );
+  const isSpectator = me?.spectator === true || me?.fired === true;
+
   for (const p of players) {
     const li = createEl("li");
+    if (p.fired || p.spectator) {
+      li.classList.add("fired");
+    }
     const swatch = createSwatch(
       AVATAR_COLORS[p.colorIndex % AVATAR_COLORS.length] ?? "#888",
     );
     const nameSpan = createEl("span", { text: p.name });
     nameSpan.style.marginLeft = "6px";
     li.append(swatch, nameSpan);
+    if (p.fired || p.spectator) {
+      const badge = createEl("span", {
+        className: "spectator-badge",
+        text: "(Fired)",
+      });
+      badge.style.fontSize = "11px";
+      badge.style.opacity = "0.7";
+      badge.style.marginLeft = "4px";
+      li.append(badge);
+    }
     roster.append(li);
   }
 
@@ -467,7 +573,7 @@ function renderRoomScreen(
     renderEvidence(state.view),
   );
 
-  if (me?.spectator) {
+  if (isSpectator) {
     container.append(
       createEl("div", {
         id: "spectator-banner",
@@ -514,7 +620,7 @@ function renderRoomScreen(
     }
   }
 
-  // Results overlay v1: winner banner + traitor reveal only; no recap timeline
+  // Results overlay: winner banner + traitor reveal + chronological event timeline
   const banner = renderResultsBanner(state.view);
   if (banner) {
     const overlay = createEl("div", {
@@ -525,14 +631,14 @@ function renderRoomScreen(
     container.append(overlay);
   }
 
-  if (!me?.spectator)
+  if (!isSpectator)
     container.append(renderElevatorControls(handlers, state.view));
 
   const roomStates = renderRoomStateList(state.view?.roomsView ?? {});
   container.append(roomStates);
 
-  if (!me?.spectator) container.append(renderChannelControls(state, handlers));
-  renderAccusations(container, state.view, handlers);
+  if (!isSpectator) container.append(renderChannelControls(state, handlers));
+  if (!isSpectator) renderAccusations(container, state.view, handlers);
 
   if (state.error) {
     const err = createEl("div", {
