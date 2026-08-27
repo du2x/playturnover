@@ -10,16 +10,16 @@ Status legend: `pending · specifying · planning · building · verifying · do
 | ID | Title | Status | Phase | Spec | Plan | Verification |
 |----|---------------------|--------|-------|------|------|--------------|
 | M0 | Walking skeleton | done | done | .dev/specs/M0-spec.md | .dev/plans/M0-plan.md | .dev/reports/M0-verification.md |
-| M1 | Full round loop | building | BUILD | .dev/specs/M1-spec.md | .dev/plans/M1-plan.md | — |
+| M1 | Full round loop | verifying | VERIFY | .dev/specs/M1-spec.md | .dev/plans/M1-plan.md | .dev/reports/M1-verification.md (pending) |
 | M2 | Evidence layer | pending | — | — | — | — |
 | M3 | Justice + recap | pending | — | — | — | — |
 
-**Next up:** M1 BUILD S6 PG-D — M1.6.1 client composition root wiring ∥ M1.6.2 tooling M1 integration suites. **Caveat:** a `git reset --hard HEAD~1` during the first M1.6.1 spawn dropped commit `2683e9f` (M1.4.2+M1.5.2 client) and wiped uncommitted config/barrel edits; all recovered (see Log 2026-08-26 HOTFIX). Do NOT reset/amend; verify before any git history surgery.
+**Next up:** M1 VERIFY — spawn `verifier` to execute V-1…V-15 independently; verdict PASS → run `scripts/validate-state.py M1` → M1 done.
 **User action pending:** `fly deploy` app `turnover-grandhotel` → record `PUBLIC_URL` in STATE.md Decisions + deploy/README.md to enable `smoke:remote` + two-browser V-9b (M0 carry-over, not blocking M1).
 
 ## Blockers
 
-(none) — HOTFIX cleared 2026-08-26: `colyseus ^0.15.57` + `@colyseus/schema ^2.0.37` now install; `tooling` workspace restored. Note: M1.5.x test teardown emits non-blocking `onDispose error: Cannot read properties of undefined (reading 'remove')`; flagged for M1.7.1 cleanup.
+(none) — HOTFIX cleared 2026-08-26: `colyseus ^0.15.57` + `@colyseus/schema ^2.0.37` now install; `tooling` workspace restored. Note: M1.5.x test teardown emitted non-blocking `onDispose error: Cannot read properties of undefined (reading 'remove')`; **resolved in M1.7.1** via `listing` stub in `HotelRoom.onCreate` + `colyseus-compat` type.
 
 ## Decisions
 
@@ -66,4 +66,6 @@ Status legend: `pending · specifying · planning · building · verifying · do
 | 2026-08-26 | M1 | BUILD S4 → M1.4.1 PASS (channels 21/21 + typecheck + build green, imports from @grandhotel/shared) + M1.4.2 PASS (client typecheck + 49 tests, no colyseus import in game/ui) → S5 PG-C queued |
 | 2026-08-26 | M1 | BUILD S5 → M1.5.1 PASS (23/23 buzzer/attrition/results/visibility/authority, typecheck green) + M1.5.2 PASS (3/3 room-observability/results, typecheck green) → S6 PG-D queued; non-blocking: test teardown emits `onDispose error: Cannot read properties of undefined (reading 'remove')`, flagged for M1.7.1 cleanup |
 | 2026-08-26 | M1 | HOTFIX-RECOVER → first M1.6.1 spawn FAILED reporting broken tree (shared unresolvable, client modules missing). Root cause: `git reset --hard HEAD~1` dropped `2683e9f` (M1.4.2+M1.5.2 client) and wiped uncommitted edits. Recovered all from `ec32b33` stash + dangling blobs + `2683e9f`; `pnpm -r typecheck` + `pnpm -r test` green again (server 87, client 51, shared, tooling). Staged M1.6.1 WIP (main.ts/index.html/style.css) preserved for finalization. |
+| 2026-08-26 | M1 | BUILD S6 → M1.6.1 PASS (composition root finalized: canvas 960×540, channel bar via CHANNEL_DURATIONS, results freeze; client 51/51 + build green) + M1.6.2 PASS (8 new integration suites, 13 tests; M0 regression green) → S7 queued. M1.6.2 flagged a real server defect: elevator arrival could stall under real clients (clock fires ~1 tick before Date.now) — fixed in b1f5cd9 by re-arming remaining delay; server 87/87 regression green. |
 | 2026-08-26 | — | TLC gates installed (Option A): `validate-spec 0 warnings` on M0+M1, `validate-plan` M0 0/0, M1 0/9 (R-21 soft), `validate-state M0` PASS (prose evidence allowed), `check-commit` OK — ready for M1 VERIFY close |
+| 2026-08-26 | M1 | BUILD S7 done → M1.7.1 PASS (user-approved review): `scripts/verify-m1.sh` executable (chain: install→typecheck/build→shared/server/client tests→tooling integration→literal sweep→Docker single-origin→smoke:local), root `verify:m1` forwarder wired, Dockerfile dist flatten fix for single-origin static serving, `onDispose` teardown cleanup (listing stub in onCreate + colyseus-compat type). BUILD done → Status `building:BUILD → verifying:VERIFY`; verifier spawned. |
