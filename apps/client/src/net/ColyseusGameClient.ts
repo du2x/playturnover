@@ -1,6 +1,6 @@
 import { Client } from "colyseus.js";
 import type { Room } from "colyseus.js";
-import { getAllRoomIds, getElevatorX, isInsideRoom } from "@grandhotel/shared";
+import { getAllRoomIds, getElevatorX, isInsideRoom, MAX_NAME_LENGTH } from "@grandhotel/shared";
 import type { ElevatorShaft, RoleType, RoomStateType } from "@grandhotel/shared";
 import type {
   ChannelType,
@@ -249,7 +249,7 @@ export class ColyseusGameClient implements GameClient {
       this.emitEvent(ev);
       throw new Error("bad-name");
     }
-    if (trimmed.length > 24) {
+    if (trimmed.length > MAX_NAME_LENGTH) {
       const ev: ClientEvent = { type: "rejected", reason: "bad-name" };
       this.emitEvent(ev);
       throw new Error("bad-name");

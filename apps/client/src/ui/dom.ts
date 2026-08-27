@@ -1,6 +1,3 @@
-import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH } from "@grandhotel/shared";
-import { filterCodeInput } from "./reducer.js";
-
 export function qs<T extends Element>(root: ParentNode, sel: string): T | null {
   return root.querySelector(sel) as T | null;
 }
@@ -18,14 +15,6 @@ export function createEl<K extends keyof HTMLElementTagNameMap>(
 
 export function clearChildren(el: HTMLElement): void {
   while (el.firstChild) el.removeChild(el.firstChild);
-}
-
-export function normalizeCodeInput(input: string): string {
-  return filterCodeInput(input);
-}
-
-export function isAlphabetChar(ch: string): boolean {
-  return ch.length === 1 && ROOM_CODE_ALPHABET.includes(ch.toUpperCase());
 }
 
 export function createButton(
@@ -75,5 +64,3 @@ export function createSwatch(color: string): HTMLSpanElement {
   s.style.verticalAlign = "middle";
   return s;
 }
-
-export { ROOM_CODE_LENGTH, ROOM_CODE_ALPHABET };

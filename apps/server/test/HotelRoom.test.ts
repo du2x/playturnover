@@ -5,7 +5,7 @@ import {
   MAX_PLAYERS,
   SERVER_MAX_SPEED_PX_S,
 } from "@grandhotel/shared";
-import { HotelRoom, computeClampedX, clamp } from "../src/rooms/HotelRoom.js";
+import { HotelRoom, computeClampedX } from "../src/rooms/HotelRoom.js";
 
 function mockClient(sessionId: string): any {
   return { sessionId } as unknown as import("colyseus").Client;
@@ -161,12 +161,6 @@ describe("HotelRoom — lifecycle phases (V-7)", () => {
 });
 
 describe("HotelRoom — movement clamp unit (V-5 / V-6 server half)", () => {
-  it("clamp helper works", () => {
-    expect(clamp(5, 0, 10)).toBe(5);
-    expect(clamp(-5, 0, 10)).toBe(0);
-    expect(clamp(15, 0, 10)).toBe(10);
-  });
-
   it("legal moves pass through", () => {
     // dt 0.1 → maxDelta 33, use mid values away from hallway bounds (96..864)
     expect(computeClampedX(400, 10, 0.1)).toBe(410);

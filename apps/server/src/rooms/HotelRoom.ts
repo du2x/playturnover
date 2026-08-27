@@ -235,6 +235,7 @@ export class HotelRoom extends Room<RoomState> {
       const runtime = this.elevatorRuntime.get(car);
       if (runtime) {
         removeRiderFromCar(runtime, client.sessionId);
+        this.syncElevatorCar(car, runtime);
       }
     }
 
@@ -479,9 +480,11 @@ export class HotelRoom extends Room<RoomState> {
     if (!parsed.success) return;
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
+    if (this.state.phase !== "playing") return;
     const elevator = this.getElevator(parsed.data.shaft);
     if (!elevator) return;
     const { car, runtime } = elevator;
+    if (Math.abs(player.x - getElevatorX(parsed.data.shaft)) > ELEVATOR_INTERACT_RADIUS) return;
     const now = Date.now();
 
     const wasIdle = runtime.state === "idle";

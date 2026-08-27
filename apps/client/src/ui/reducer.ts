@@ -1,5 +1,5 @@
 import type { ClientEvent, RoomStateView } from "../net/GameClient.js";
-import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH } from "@grandhotel/shared";
+import { MAX_NAME_LENGTH, ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH } from "@grandhotel/shared";
 
 export type { RoomStateView, ClientEvent };
 export type Phase = RoomStateView["phase"];
@@ -45,7 +45,7 @@ export function filterCodeInput(input: string): string {
 
 export function isValidName(name: string): boolean {
   const t = name.trim();
-  return t.length > 0 && t.length <= 24;
+  return t.length > 0 && t.length <= MAX_NAME_LENGTH;
 }
 
 export function isValidCode(code: string): boolean {
@@ -60,7 +60,7 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
         // stay idle, surface error
         return { ...state, screen: "idle", error: "Name required" } as UIState;
       }
-      if (trimmed.length > 24) {
+      if (trimmed.length > MAX_NAME_LENGTH) {
         return { ...state, screen: "idle", error: "Name too long" } as UIState;
       }
       return { screen: "named", name: trimmed, codeInput: "", error: undefined };

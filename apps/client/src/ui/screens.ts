@@ -1,4 +1,4 @@
-import { AVATAR_COLORS, getAllRoomIds } from "@grandhotel/shared";
+import { AVATAR_COLORS, MAX_NAME_LENGTH, ROOM_CODE_LENGTH, getAllRoomIds } from "@grandhotel/shared";
 import { clearChildren, createButton, createEl, createInput, createSelect, createSwatch, qs } from "./dom.js";
 import { filterCodeInput } from "./reducer.js";
 import type { RoomStateView, UIState } from "./reducer.js";
@@ -48,7 +48,7 @@ function renderNameScreen(container: HTMLElement, state: UIState, handlers: UIHa
   clearChildren(container);
   const title = createEl("h2", { text: "Enter your name" });
   const input = createInput("Display name", { id: "name-input", value: "" }) as HTMLInputElement;
-  input.maxLength = 24;
+  input.maxLength = MAX_NAME_LENGTH;
   const submit = createButton("Continue", () => {
     handlers.onSubmitName(input.value);
   }, { id: "name-submit" });
@@ -75,7 +75,7 @@ function renderMenuScreen(container: HTMLElement, state: UIState, handlers: UIHa
   const joinHeader = createEl("h3", { text: "Join by code" });
   const codeInput = createInput("CODE", { id: "code-input", value: state.codeInput }) as HTMLInputElement;
   // uppercase filtered to shared alphabet
-  codeInput.maxLength = 4;
+  codeInput.maxLength = ROOM_CODE_LENGTH;
   codeInput.style.textTransform = "uppercase";
   codeInput.addEventListener("input", () => {
     const filtered = filterCodeInput(codeInput.value);
@@ -88,12 +88,12 @@ function renderMenuScreen(container: HTMLElement, state: UIState, handlers: UIHa
 
   const joinBtn = createButton("Join", () => handlers.onJoinRoom(codeInput.value), {
     id: "join-btn",
-    disabled: codeInput.value.length !== 4,
+    disabled: codeInput.value.length !== ROOM_CODE_LENGTH,
   });
 
   // enable/disable reacts to input — re-evaluate on input
   codeInput.addEventListener("input", () => {
-    joinBtn.disabled = codeInput.value.length !== 4;
+    joinBtn.disabled = codeInput.value.length !== ROOM_CODE_LENGTH;
   });
 
   container.append(title, createBtn, joinHeader, codeInput, joinBtn);
