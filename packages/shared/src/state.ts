@@ -96,7 +96,7 @@ export class RoomData extends Schema {
 // ── Elevator ──────────────────────────────────────────────────────────────────
 
 export type ElevatorShaft = "A" | "B";
-export type ElevatorStatus = "idle" | "arriving" | "boarding";
+export type ElevatorStatus = "idle" | "arriving" | "boarding" | "traveling";
 
 export class ElevatorCar extends Schema {
   @type("string")

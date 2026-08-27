@@ -7,26 +7,30 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <div id="app"></div>
-    <div id="overlay">
-      <div id="hud-bar" hidden>
-        <div id="hud-phase" class="hud-chip"></div>
-        <div id="hud-floor" class="hud-chip"></div>
-        <div id="hud-code" class="hud-chip code-mono"></div>
-        <div id="hud-elevators" class="hud-chip"></div>
-        <div id="hud-roster"></div>
+    <div id="app">
+      <div id="overlay">
+        <div id="hud-bar" hidden>
+          <div id="hud-phase" class="hud-chip"></div>
+          <div id="hud-floor" class="hud-chip"></div>
+          <div id="hud-code" class="hud-chip code-mono"></div>
+          <div id="hud-elevators" class="hud-chip"></div>
+          <div id="hud-roster"></div>
+        </div>
+        <div id="screen-name" class="screen"></div>
+        <div id="screen-menu" class="screen" hidden></div>
+        <div id="screen-room" class="screen" hidden></div>
+        <div id="hud" hidden></div>
+        <div id="channel-bar" hidden>
+          <div id="channel-label"></div>
+          <div id="channel-track"><div id="channel-fill"></div></div>
+        </div>
+        <div id="toast"></div>
+        <div id="error"></div>
       </div>
-      <div id="screen-name" class="screen"></div>
-      <div id="screen-menu" class="screen" hidden></div>
-      <div id="screen-room" class="screen" hidden></div>
-      <div id="hud" hidden></div>
-      <div id="channel-bar" hidden>
-        <div id="channel-label"></div>
-        <div id="channel-track"><div id="channel-fill"></div></div>
-      </div>
-      <div id="toast"></div>
-      <div id="error"></div>
     </div>
+    <!-- V-6: shown when the window is narrower than VIEWPORT_MIN_WIDTH_PX;
+         stays outside #app so it renders full-size, unscaled. -->
+    <div id="viewport-floor-message" hidden>Window too small</div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

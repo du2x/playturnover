@@ -3,6 +3,8 @@
 }
 body {
   margin: 0;
+  /* Containing block for the absolutely-positioned stage (#app). */
+  position: relative;
   font-family:
     system-ui,
     -apple-system,
@@ -18,10 +20,37 @@ body {
   width: 960px;
   height: 540px;
   background: #bbb;
-  position: relative;
-  margin: 0 auto;
   border: 2px solid #888;
   overflow: hidden;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  margin-left: -480px; /* half of the design stage: keeps the box centered regardless of viewport */
+  transform-origin: top center;
+}
+/* V-6 proportional viewport scaling: #overlay lives inside #app's coordinate
+   space so both the canvas and every DOM overlay scale identically. */
+#app {
+  transform: scale(var(--gh-scale, 1));
+}
+
+/* V-6 below-floor notice: fixed to the viewport (not inside #app), so it
+   reads full-size while the stage is clamped at the floor scale. */
+#viewport-floor-message {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 16px;
+  background: rgba(20, 20, 20, 0.92);
+  color: #fff;
+  font-size: 16px;
+}
+#viewport-floor-message[hidden] {
+  display: none;
 }
 #overlay {
   position: absolute;
@@ -87,12 +116,27 @@ body {
 }
 #hud-roster {
   margin-left: auto;
+  min-width: 0;
 }
 #hud-roster .roster {
   margin: 0;
   padding: 0;
   gap: 6px;
-  flex-wrap: nowrap;
+  /* Wrap instead of clipping chips at the left/right edges (V-5). */
+  flex-wrap: wrap;
+}
+/* V-5 HUD fit: chips shrink/ellipsize rather than pushing the bar off-screen. */
+#hud-bar .hud-chip {
+  min-width: 0;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.roster li .roster-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /* Host pre-round cluster sits centered below the HUD bar */
@@ -155,6 +199,30 @@ body {
 }
 #overlay input:focus {
   outline: 2px solid #4a90e2;
+}
+/* V-4 keyboard accessibility: visible focus ring for interactive controls. */
+#overlay button:focus-visible,
+#overlay input:focus-visible {
+  outline: 2px solid #4a90e2;
+  outline-offset: 1px;
+}
+
+/* ── Menu/name screen cards (V-4): centered card with game title ── */
+.screen-card {
+  background: #fff;
+  color: #111;
+  padding: 20px 24px;
+  margin: 48px auto 8px;
+  max-width: 340px;
+  border: 1px solid #999;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  text-align: center;
+}
+.screen-title {
+  font-size: 26px;
+  letter-spacing: 0.08em;
+  margin: 0 0 12px;
 }
 #overlay .roster {
   list-style: none;

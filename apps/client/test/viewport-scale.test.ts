@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
@@ -11,6 +11,7 @@ import {
   VIEW_DESIGN_WIDTH_PX,
   VIEW_DESIGN_HEIGHT_PX,
 } from "../src/ui/viewportScale.js";
+import { applyViewportScale } from "../src/ui/applyViewportScale.js";
 
 describe("viewport scale (V-6)", () => {
   it("full size: scale 1 and fitWidth 960 at exactly 960", () => {
@@ -91,5 +92,83 @@ describe("viewport scale (V-6)", () => {
       "utf8",
     );
     expect(source).toContain('from "@grandhotel/shared"');
+  });
+});
+
+// Regression note: the movement-math half of V-6 is untouched by the wiring —
+// step/clamp logic lives in shared constants + apps/client/src/movement and is
+// guarded by the shared suite (asserted below) and the client movement tests.
+describe("viewport scale (V-6 wiring)", () => {
+  let root: HTMLElement;
+
+  beforeEach(() => {
+    // Fresh root per case; drop any stale message from earlier calls.
+    document.getElementById("viewport-floor-message")?.remove();
+    root = document.createElement("div");
+    document.body.append(root);
+  });
+
+  afterEach(() => {
+    root.remove();
+  });
+
+  it("sets --gh-scale to 1 at full design width and hides the notice", () => {
+    const result = applyViewportScale(root, STAGE_WIDTH_PX);
+    expect(result).toEqual({ scale: 1, belowFloor: false });
+    expect(root.style.getPropertyValue("--gh-scale")).toBe("1");
+    expect(
+      document.getElementById("viewport-floor-message")?.hidden,
+    ).toBe(true);
+  });
+
+  it("sets --gh-scale proportionally at 840px with no notice", () => {
+    const result = applyViewportScale(root, 840);
+    expect(result.belowFloor).toBe(false);
+    expect(result.scale).toBeCloseTo(840 / STAGE_WIDTH_PX, 12);
+    expect(root.style.getPropertyValue("--gh-scale")).toBe(
+      String(840 / STAGE_WIDTH_PX),
+    );
+    expect(
+      document.getElementById("viewport-floor-message")?.hidden,
+    ).toBe(true);
+  });
+
+  it("keeps the notice hidden exactly at the floor boundary (700)", () => {
+    applyViewportScale(root, VIEWPORT_MIN_WIDTH_PX);
+    expect(root.style.getPropertyValue("--gh-scale")).toBe(
+      String(VIEWPORT_MIN_WIDTH_PX / STAGE_WIDTH_PX),
+    );
+    expect(
+      document.getElementById("viewport-floor-message")?.hidden,
+    ).toBe(true);
+  });
+
+  it("shows the notice only below 700px (640) with a clamped scale", () => {
+    applyViewportScale(root, 640);
+    const expectedScale = String(VIEWPORT_MIN_WIDTH_PX / STAGE_WIDTH_PX);
+    expect(root.style.getPropertyValue("--gh-scale")).toBe(expectedScale);
+    const message = document.getElementById("viewport-floor-message");
+    expect(message?.hidden).toBe(false);
+    // Message text references the floor so players know what to widen to.
+    expect(message?.textContent).toContain(String(VIEWPORT_MIN_WIDTH_PX));
+  });
+
+  it("re-shows the stage when the viewport widens back past the floor", () => {
+    applyViewportScale(root, 640);
+    expect(
+      document.getElementById("viewport-floor-message")?.hidden,
+    ).toBe(false);
+    applyViewportScale(root, 960);
+    expect(
+      document.getElementById("viewport-floor-message")?.hidden,
+    ).toBe(true);
+  });
+
+  it("creates the message element under root when missing", () => {
+    expect(document.getElementById("viewport-floor-message")).toBeNull();
+    applyViewportScale(root, 640);
+    const created = document.getElementById("viewport-floor-message");
+    expect(created).not.toBeNull();
+    expect(created?.hidden).toBe(false);
   });
 });

@@ -12,7 +12,8 @@
     "smoke:remote": "tsx src/smoke.ts",
     "verify:m0": "echo 'verify:m0 not implemented in M0.1.1'",
     "verify:m2": "bash ../../scripts/verify-m2.sh",
-    "verify:m3": "bash ../../scripts/verify-m3.sh"
+    "verify:m3": "bash ../../scripts/verify-m3.sh",
+    "verify:m4": "bash ../../scripts/verify-m4.sh"
   },
   "dependencies": {
     "@colyseus/schema": "^2.0.37",

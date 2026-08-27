@@ -102,6 +102,22 @@ export class HallScene extends Phaser.Scene {
     this.renderBuilding();
     this.setupInput();
     this.spawnLocalAvatar();
+    // Replay any roster entries that raced the scene boot.
+    for (const [id, pending] of this.pendingRemotes) {
+      if (!this.remotes.has(id)) {
+        const bounds = getHallBounds(pending.floor);
+        this.remotes.set(
+          id,
+          this.createAvatarBody(
+            (bounds.minX + bounds.maxX) / 2,
+            bounds.y,
+            pending.name,
+            pending.colorIndex,
+          ),
+        );
+      }
+    }
+    this.pendingRemotes.clear();
   }
 
   private renderBuilding(): void {
@@ -541,8 +557,20 @@ export class HallScene extends Phaser.Scene {
 
   // ── Exposed API for net layer ────────────────────────────────────────────
 
+  /** Remotes reported before the scene finished booting are replayed in create(). */
+  private pendingRemotes = new Map<
+    string,
+    { colorIndex: number; floor: number; name: string }
+  >();
+
   addRemote(id: string, colorIndex: number, floor = 0, name = ""): void {
     if (this.remotes.has(id)) return;
+    // Scene GameObjects don't exist until create(); defer instead of throwing
+    // (a throw here would abort the whole onState pipeline).
+    if (!this.add) {
+      this.pendingRemotes.set(id, { colorIndex, floor, name });
+      return;
+    }
     const bounds = getHallBounds(floor);
     const x = (bounds.minX + bounds.maxX) / 2;
     const body = this.createAvatarBody(x, bounds.y, name, colorIndex);

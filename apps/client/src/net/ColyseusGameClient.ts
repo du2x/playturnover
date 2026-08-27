@@ -254,7 +254,7 @@ function readElevator(
     return { floor: 0, state: "idle" };
   }
   const state = (e as { state?: unknown }).state;
-  const allowed = ["idle", "arriving", "boarding"] as const;
+  const allowed = ["idle", "arriving", "boarding", "traveling"] as const;
   return {
     floor: (e as { floor?: number }).floor ?? 0,
     state: allowed.includes(state as ElevatorStatus)

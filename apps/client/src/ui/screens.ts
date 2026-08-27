@@ -14,6 +14,9 @@ import {
 } from "./dom.js";
 import { filterCodeInput } from "./reducer.js";
 import type { RoomStateView, UIState } from "./reducer.js";
+import { truncateName } from "./hudText.js";
+
+const GAME_TITLE = "Turnover";
 
 /**
  * Handlers the HTML overlay needs after moving elevator triggering,
@@ -103,6 +106,9 @@ function renderNameScreen(
   handlers: UIHandlers,
 ): void {
   clearChildren(container);
+  // Carded presentation (V-4): game title heading + centered card body.
+  const card = createEl("div", { className: "screen-card" });
+  card.append(createEl("h1", { className: "screen-title", text: GAME_TITLE }));
   const title = createEl("h2", { text: "Enter your name" });
   const input = createInput("Display name", {
     id: "name-input",
@@ -122,7 +128,7 @@ function renderNameScreen(
   };
   input.addEventListener("keydown", onKey);
 
-  container.append(title, input, submit);
+  card.append(title, input, submit);
   if (state.error) {
     const err = createEl("div", {
       id: "name-error",
@@ -130,8 +136,9 @@ function renderNameScreen(
       text: state.error,
     });
     err.style.color = "#b00020";
-    container.append(err);
+    card.append(err);
   }
+  container.append(card);
 }
 
 function renderMenuScreen(
@@ -141,7 +148,10 @@ function renderMenuScreen(
 ): void {
   if (state.screen !== "named") return;
   clearChildren(container);
-  const title = createEl("h2", { text: `Welcome, ${state.name}` });
+  // Carded presentation (V-4): game title heading + centered card body.
+  const card = createEl("div", { className: "screen-card" });
+  card.append(createEl("h1", { className: "screen-title", text: GAME_TITLE }));
+  const title = createEl("h2", { text: `Welcome, ${truncateName(state.name)}` });
   const createBtn = createButton("Create room", () => handlers.onCreateRoom(), {
     id: "create-room-btn",
   });
@@ -177,7 +187,7 @@ function renderMenuScreen(
     joinBtn.disabled = codeInput.value.length !== ROOM_CODE_LENGTH;
   });
 
-  container.append(title, createBtn, joinHeader, codeInput, joinBtn);
+  card.append(title, createBtn, joinHeader, codeInput, joinBtn);
 
   if (state.error) {
     const err = createEl("div", {
@@ -186,8 +196,9 @@ function renderMenuScreen(
       text: state.error,
     });
     err.style.color = "#b00020";
-    container.append(err);
+    card.append(err);
   }
+  container.append(card);
 }
 
 // ── Top HUD bar (roster / phase / floor / code / elevators) ─────────────────
@@ -216,14 +227,19 @@ export function renderHudBar(
 
   clearChildren(rosterHost);
 
-  // Roster chips (swatch + name + fired badge)
+  // Roster chips (swatch + truncated name + fired badge) — up to MAX_PLAYERS
+  // entries; all rule-bearing chips (phase/floor/code/elevators/fired badge)
+  // keep rendering; names are presentation-only and ellipsized via CSS caps.
   const roster = createEl("ul", { className: "roster" });
   for (const p of view?.players ?? []) {
     const li = createEl("li");
     if (p.fired || p.spectator) li.classList.add("fired");
     li.append(
       createSwatch(AVATAR_COLORS[p.colorIndex % AVATAR_COLORS.length] ?? "#888"),
-      createEl("span", { text: p.name }),
+      createEl("span", {
+        className: "roster-name",
+        text: truncateName(p.name),
+      }),
     );
     if (p.fired || p.spectator) {
       const badge = createEl("span", {
@@ -360,7 +376,7 @@ function renderResultsBanner(view: RoomStateView | null): HTMLElement | null {
   const traitorLine = createEl("div", {
     className: "results-traitor",
     text: reveal
-      ? `Saboteur: ${reveal.name} (${reveal.sessionId.slice(0, 6)})`
+      ? `Saboteur: ${truncateName(reveal.name)} (${reveal.sessionId.slice(0, 6)})`
       : "Saboteur reveal unavailable",
   });
 
@@ -384,7 +400,8 @@ function renderResultsBanner(view: RoomStateView | null): HTMLElement | null {
 
   const getPlayerName = (id: string): string => {
     if (!id) return "";
-    return playerNames.get(id) ?? id.slice(0, 6);
+    const mapped = playerNames.get(id) ?? id.slice(0, 6);
+    return truncateName(mapped);
   };
 
   for (const event of view.recapEvents) {

@@ -4,12 +4,15 @@ import type { UIAction, UIState } from "./ui/reducer.js";
 import { filterCodeInput, initialState, uiReducer } from "./ui/reducer.js";
 import { renderOverlay } from "./ui/screens.js";
 import { Interpolator } from "./movement/interpolate.js";
+import { applyViewportScale } from "./ui/applyViewportScale.js";
 import {
   ACCUSATION_RANGE_TILES,
   CHANNEL_DURATIONS,
   CLIENT_INPUT_SEND_HZ,
   ELEVATOR_INTERACT_RADIUS,
   PLAYER_SPEED_PX_S,
+  STAGE_HEIGHT_PX,
+  STAGE_WIDTH_PX,
 } from "@grandhotel/shared";
 import {
   FLOOR_Y_STEP,
@@ -173,6 +176,8 @@ async function ensureGameStarted(view: RoomStateView): Promise<void> {
     ]);
     const sceneInstance = new HallScene() as HallSceneType;
     sceneInstance.setLocalColorIndex(myColor);
+    // R-6: label the local avatar with the real initial instead of "?"
+    sceneInstance.setLocalPlayerName(me?.name ?? "");
     sceneInstance.onElevatorCall((shaft) => {
       const currentView = uiState.screen === "inRoom" ? uiState.view : null;
       if (!resultsFrozen && !isFiredOrSpectator(currentView)) {
@@ -180,12 +185,12 @@ async function ensureGameStarted(view: RoomStateView): Promise<void> {
       }
     });
 
-    // Phaser will mount canvas into #app (960×540 fits lobby + 3 guest floors)
+    // Phaser will mount canvas into #app (stage size fits lobby + 3 guest floors)
     game = new Phaser.Game({
       type: Phaser.AUTO,
       parent: "app",
-      width: 960,
-      height: 540,
+      width: STAGE_WIDTH_PX,
+      height: STAGE_HEIGHT_PX,
       backgroundColor: "#bbbbbb",
       pixelArt: true,
       scene: [sceneInstance as unknown as Phaser.Scene],
@@ -411,7 +416,7 @@ function syncRoster(view: RoomStateView): void {
     if (!interp) {
       interp = new Interpolator();
       interpolators.set(p.id, interp);
-      hallScene.addRemote(p.id, p.colorIndex, p.floor);
+      hallScene.addRemote(p.id, p.colorIndex, p.floor, p.name);
     }
     const now =
       typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -548,8 +553,9 @@ client.onEvent((ev) => {
 
 // Keyboard hold actions (channels and accusations). Mirrors the on-screen controls.
 function onKeyDown(e: KeyboardEvent): void {
+  const pressedKey = (e.key || "").toLowerCase();
   if (e.repeat) return;
-  const digit = "0123".indexOf(e.key);
+  const digit = "0123".indexOf(pressedKey);
   if (digit >= 0) {
     // Elevators run pre-round too; digits only need the fired/spectator gate.
     const preView = uiState.screen === "inRoom" ? uiState.view : null;
@@ -622,7 +628,7 @@ function onKeyDown(e: KeyboardEvent): void {
 }
 
 function onKeyUp(e: KeyboardEvent): void {
-  if (e.key.toLowerCase() === "e") {
+  if ((e.key || "").toLowerCase() === "e") {
     if (accusationActive || accusationKeyHeld) {
       clearAccusationActive();
       const bar = getChannelBar();
@@ -662,6 +668,20 @@ function removeInputListeners(): void {
   window.removeEventListener("blur", onWindowBlur);
 }
 
+// V-6 wiring: proportional viewport scaling on #app (initial call included).
+// Purely presentational — movement/input listeners are untouched; pointer
+// mapping over the scaled canvas is asserted manually in V-11 (SKIP-MANUAL).
+function setupViewportScaling(): void {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  const appRoot = document.getElementById("app");
+  if (!appRoot) return;
+  const applyScaling = (): void => {
+    applyViewportScale(appRoot, window.innerWidth);
+  };
+  applyScaling();
+  window.addEventListener("resize", applyScaling);
+}
+
 // Initial boot: show name screen (reducer Idle) or rerender
 function boot(): string {
   const overlay = getOverlay();
@@ -669,6 +689,7 @@ function boot(): string {
     ensureHudElements(overlay);
     rerender();
   }
+  setupViewportScaling();
   setupInputListeners();
   // Also ensure HallScene local feedback runs every frame via its own update (instant self-feedback)
   // Remote interpolation and input pump start only after entering room (ensureGameStarted)
@@ -689,6 +710,27 @@ export { boot };
 if (typeof window !== "undefined") {
   // expose for debug
   (window as unknown as Record<string, unknown>).__gh_client = client;
+  if (import.meta.env.DEV) {
+    // Playwright/dev assertions: live view + scene snapshot.
+    (window as unknown as Record<string, unknown>).__ghDebug = () => ({
+      screen: uiState.screen,
+      phase: uiState.screen === "inRoom" ? (uiState.view?.phase ?? null) : null,
+      myFloor:
+        uiState.screen === "inRoom" ? (uiState.view?.myFloor ?? null) : null,
+      localX: hallScene ? hallScene.getLocalX() : null,
+      sceneFloor: hallScene ? hallScene.getLocalFloor() : null,
+      elevatorsView:
+        uiState.screen === "inRoom" ? (uiState.view?.elevatorsView ?? null) : null,
+      players:
+        uiState.screen === "inRoom"
+          ? uiState.view?.players.map((p) => ({
+              name: p.name,
+              x: p.x,
+              floor: p.floor,
+            })) ?? []
+          : [],
+    });
+  }
 }
 
 // Cleanup on unload (optional)
