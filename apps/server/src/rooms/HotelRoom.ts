@@ -68,6 +68,7 @@ import type { Clock } from "../time.js";
 import { ColyseusClock } from "../time.js";
 import type { Cancel } from "../time.js";
 import { TelemetryLogger, type TelemetryRecord } from "../telemetry.js";
+import { roomCodeRegistry } from "./roomCodes.js";
 
 // ── movement helpers ────────────────────────────────────────────────────────
 
@@ -104,6 +105,11 @@ export class HotelRoom extends Room<RoomState> {
   private roleMap = new Map<string, "staff" | "saboteur">();
   private shiftLengthS: number = SHIFT_LENGTH_S;
   private elevatorRuntime = new WeakMap<ElevatorCar, ElevatorCarState>();
+  // Riders in flight: car departed but players not yet dropped at dest.
+  private pendingDrops = new Map<
+    string,
+    { riders: string[]; destFloor: number; fromFloor: number }
+  >();
   private activeChannels = new Map<string, Channel>();
   private timers = new Map<string, Cancel>();
   private injectedClock?: Clock;
@@ -112,6 +118,7 @@ export class HotelRoom extends Room<RoomState> {
   private telemetry = new TelemetryLogger();
   private roundStartedAt = 0;
   private undiscoveredCrimes = new Map<string, number>();
+  private acquiredRoomCode = "";
 
   constructor(clock?: Clock) {
     super();
@@ -169,6 +176,15 @@ export class HotelRoom extends Room<RoomState> {
     this.state.traitorReveal = null;
     this.state.coverage = 0;
     this.state.coveragePercent = 0;
+
+    // R-1 join-by-code: acquire a unique short code, expose it on the
+    // replicated state and matchmaking metadata. Runs after the listing stub
+    // above so directly-constructed test rooms tolerate setMetadata.
+    this.acquiredRoomCode = roomCodeRegistry.acquire();
+    this.state.roomCode = this.acquiredRoomCode;
+    (this as unknown as {
+      setMetadata: (meta: Record<string, string>) => Promise<void>;
+    }).setMetadata({ roomCode: this.acquiredRoomCode });
 
     // building topology — ROOM_COUNT rooms via shared getRoomRect
     const ids = getAllRoomIds();
@@ -236,6 +252,9 @@ export class HotelRoom extends Room<RoomState> {
   }
 
   onDispose(): void {
+    if (this.acquiredRoomCode) {
+      roomCodeRegistry.release(this.acquiredRoomCode);
+    }
     this.clockAdapter.clearAll();
   }
 
@@ -645,9 +664,15 @@ export class HotelRoom extends Room<RoomState> {
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
     if (player.fired || player.spectator) return;
-    if (this.state.phase !== "playing") return;
+    // Elevators run pre-round too (lobby socializing / decoy calls).
+    if (this.state.phase !== "waiting" && this.state.phase !== "playing")
+      return;
     const elevator = this.getElevator(parsed.data.shaft);
     if (!elevator) return;
+    if (this.pendingDrops.has(parsed.data.shaft)) {
+      // Car is in flight — a call now would stomp its travel floor.
+      return;
+    }
     const { car, runtime } = elevator;
     if (
       Math.abs(player.x - getElevatorX(parsed.data.shaft)) >
@@ -680,7 +705,8 @@ export class HotelRoom extends Room<RoomState> {
   private handleRideElevator(client: Client, raw: unknown): void {
     const parsed = RideElevatorMsgSchema.safeParse(raw ?? {});
     if (!parsed.success) return;
-    if (this.state.phase !== "playing") return;
+    if (this.state.phase !== "waiting" && this.state.phase !== "playing")
+      return;
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
     if (player.fired || player.spectator) return;
@@ -741,36 +767,59 @@ export class HotelRoom extends Room<RoomState> {
       return;
     }
 
+    // Two-stage ride: the car departs now (its floor broadcast changes, so
+    // clients animate the travel), while seated players stay authoritative on
+    // the origin floor until the drop tick ELEVATOR_RIDE_MS later.
+    const fromFloor = runtime.floor;
     const { riders, destFloor } = completeRide(runtime);
-    if (destFloor !== null) {
-      const elevatorX = getElevatorX(car.shaft);
-      for (const sessionId of riders) {
-        const p = this.state.players.get(sessionId);
-        const fromFloor = p ? p.floor : 0;
-        if (p) {
-          p.floor = destFloor;
-          p.x = elevatorX;
-          // floor change via elevator cancels any active channel (R-9)
-          this.cancelChannel(sessionId);
-        }
-        this.recordEvent(
-          "ride",
-          sessionId,
-          "",
-          "",
-          true,
-          this.getRoleFor(sessionId) === "saboteur",
-          false,
-          car.shaft,
-          { fromFloor, destFloor },
-        );
-      }
+    if (destFloor !== null && riders.length > 0) {
+      this.pendingDrops.set(shaft, { riders, destFloor, fromFloor });
+      runtime.floor = destFloor;
+      this.syncElevatorCar(car, runtime);
+      this.schedule("drop:" + shaft, ELEVATOR_RIDE_MS, () =>
+        this.handleElevatorDrop(shaft),
+      );
+    } else if (runtime.queue.length > 0) {
+      this.dequeueNextBatch(shaft);
+    } else {
+      resetElevatorState(runtime);
+      this.syncElevatorCar(car, runtime);
+    }
+    this.timers.delete("ride:" + shaft);
+  }
+
+  private handleElevatorDrop(shaft: string): void {
+    const drop = this.pendingDrops.get(shaft);
+    this.pendingDrops.delete(shaft);
+    this.timers.delete("drop:" + shaft);
+    const elevator = this.getElevator(shaft);
+    if (!elevator || !drop) return;
+    const { car, runtime } = elevator;
+    const elevatorX = getElevatorX(car.shaft);
+    for (const sessionId of drop.riders) {
+      const p = this.state.players.get(sessionId);
+      if (!p || p.fired || p.spectator) continue;
+      p.floor = drop.destFloor;
+      p.x = elevatorX;
+      // floor change via elevator cancels any active channel (R-9)
+      this.cancelChannel(sessionId);
+      this.recordEvent(
+        "ride",
+        sessionId,
+        "",
+        "",
+        true,
+        this.getRoleFor(sessionId) === "saboteur",
+        false,
+        car.shaft,
+        { fromFloor: drop.fromFloor, destFloor: drop.destFloor },
+      );
     }
 
-    this.syncElevatorCar(car, runtime);
-    this.timers.delete("ride:" + shaft);
-
     if (runtime.queue.length > 0) {
+      // Queued riders board where they are still standing (origin floor),
+      // so bring the car back there before starting the next cycle.
+      runtime.floor = drop.fromFloor;
       this.dequeueNextBatch(shaft);
     } else {
       resetElevatorState(runtime);
