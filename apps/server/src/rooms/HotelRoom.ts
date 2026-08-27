@@ -1,7 +1,6 @@
 import { Room } from "../colyseus-compat.js";
 import type { Client } from "colyseus";
 import {
-  COVERAGE_TARGET,
   ELEVATOR_ARRIVE_MS,
   ELEVATOR_INTERACT_RADIUS,
   ELEVATOR_RIDE_MS,
@@ -49,6 +48,7 @@ import {
 import type { ElevatorCarState } from "../elevator.js";
 import { canStartChannel, applyChannelCompletion } from "../channels.js";
 import type { Channel } from "../channels.js";
+import { attritionWinner, beginShift, computeCoverage, coverageWinner } from "../shift.js";
 import type { Clock } from "../time.js";
 import { ColyseusClock } from "../time.js";
 import type { Cancel } from "../time.js";
@@ -336,7 +336,6 @@ export class HotelRoom extends Room<RoomState> {
 
     // success: transition to playing, set shift timer, spawn at lobby, assign roles
     this.state.phase = "playing";
-    this.state.shiftEndsAt = this.now() + this.shiftLengthS * 1000;
 
     // lobby gather spawn — all players at lobby center floor 0
     for (const p of this.state.players.values()) {
@@ -346,12 +345,16 @@ export class HotelRoom extends Room<RoomState> {
 
     // secret role assignment — uniformly pick one saboteur
     const ids = [...this.state.players.keys()];
-    const idx = Math.floor(Math.random() * ids.length);
-    const saboteurId = ids[idx] ?? ids[0] ?? null;
-    this.saboteurSessionId = saboteurId;
+    const { saboteurSessionId, roleBySessionId, endsAt } = beginShift(
+      ids,
+      Math.random,
+      this.now(),
+      this.shiftLengthS * 1000,
+    );
+    this.state.shiftEndsAt = endsAt;
+    this.saboteurSessionId = saboteurSessionId;
     this.roleMap.clear();
-    for (const sid of ids) {
-      const role: "staff" | "saboteur" = sid === saboteurId ? "saboteur" : "staff";
+    for (const [sid, role] of roleBySessionId) {
       this.roleMap.set(sid, role);
       const c = this.clientMap.get(sid);
       const anyC = c as unknown as { send?: (t: string, d: unknown) => void } | undefined;
@@ -375,7 +378,7 @@ export class HotelRoom extends Room<RoomState> {
     if (this.state.phase === "results") return;
 
     const preppedCount = [...this.state.rooms.values()].filter((r) => r.state === "prepped").length;
-    this.state.coverage = preppedCount / ROOM_COUNT;
+    this.state.coverage = computeCoverage(preppedCount, ROOM_COUNT);
 
     this.state.winner = winner;
     this.state.phase = "results";
@@ -402,9 +405,8 @@ export class HotelRoom extends Room<RoomState> {
     if (this.state.phase !== "playing") return;
     if (this.now() >= this.state.shiftEndsAt) {
       const preppedCount = [...this.state.rooms.values()].filter((r) => r.state === "prepped").length;
-      const coverage = preppedCount / ROOM_COUNT;
-      const winner: "staff" | "saboteur" = coverage >= COVERAGE_TARGET ? "staff" : "saboteur";
-      this.endRound(winner);
+      const coverage = computeCoverage(preppedCount, ROOM_COUNT);
+      this.endRound(coverageWinner(coverage));
     }
   }
 
@@ -414,9 +416,8 @@ export class HotelRoom extends Room<RoomState> {
     const totalConnected = this.state.players.size;
     const saboteurConnected = this.saboteurSessionId ? (this.state.players.has(this.saboteurSessionId) ? 1 : 0) : 0;
     const staffCount = totalConnected - saboteurConnected;
-    if (staffCount <= 1) {
-      this.endRound("saboteur");
-    }
+    const winner = attritionWinner(totalConnected, saboteurConnected);
+    if (winner) this.endRound(winner);
   }
 
   private broadcastResults(): void {
