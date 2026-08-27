@@ -355,27 +355,27 @@ describe("channel cancel cleanly", () => {
 // Pure helpers unit test (edge case guard)
 describe("channels pure helpers", () => {
   it("canStartChannel rejects when phase is not playing", () => {
-    const result = canStartChannel("prep", "1-0", "s0", true, "waiting", "clean", false, false);
+    const result = canStartChannel("prep", "1-0", "s0", true, "waiting", "clean", false, false, 1000);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("not-playing");
   });
 
   it("canStartChannel rejects already channeling", () => {
-    const result = canStartChannel("prep", "1-0", "s0", true, "playing", "clean", false, true);
+    const result = canStartChannel("prep", "1-0", "s0", true, "playing", "clean", false, true, 1000);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("already-channeling");
   });
 
   it("canStartChannel returns duration from shared constants", () => {
-    const prep = canStartChannel("prep", "1-0", "s0", true, "playing", "clean", false, false);
+    const prep = canStartChannel("prep", "1-0", "s0", true, "playing", "clean", false, false, 1000);
     expect(prep.ok).toBe(true);
     if (prep.ok) expect(prep.channel.endsAt - prep.channel.startedAt).toBe(PREP_TIME_MS);
 
-    const unp = canStartChannel("unprep", "1-0", "s0", true, "playing", "prepped", true, false);
+    const unp = canStartChannel("unprep", "1-0", "s0", true, "playing", "prepped", true, false, 1000);
     expect(unp.ok).toBe(true);
     if (unp.ok) expect(unp.channel.endsAt - unp.channel.startedAt).toBe(UNPREP_TIME_MS);
 
-    const fake = canStartChannel("fake", "1-0", "s0", true, "playing", "clean", true, false);
+    const fake = canStartChannel("fake", "1-0", "s0", true, "playing", "clean", true, false, 1000);
     expect(fake.ok).toBe(true);
     if (fake.ok) expect(fake.channel.endsAt - fake.channel.startedAt).toBe(PREP_TIME_MS);
   });

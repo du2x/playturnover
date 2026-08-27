@@ -49,6 +49,9 @@ import {
 import type { ElevatorCarState } from "../elevator.js";
 import { canStartChannel, applyChannelCompletion } from "../channels.js";
 import type { Channel } from "../channels.js";
+import type { Clock } from "../time.js";
+import { ColyseusClock } from "../time.js";
+import type { Cancel } from "../time.js";
 
 // ── movement helpers ────────────────────────────────────────────────────────
 
@@ -82,13 +85,29 @@ export class HotelRoom extends Room<RoomState> {
   private roleMap = new Map<string, "staff" | "saboteur">();
   private shiftLengthS: number = SHIFT_LENGTH_S;
   private elevatorRuntime = new WeakMap<ElevatorCar, ElevatorCarState>();
-  private elevatorArriveTimeout = new Map<string, unknown>();
-  private elevatorRideTimeout = new Map<string, unknown>();
   private activeChannels = new Map<string, Channel>();
-  private channelTimeouts = new Map<string, unknown>();
-  private shiftTimer: unknown = null;
+  private timers = new Map<string, Cancel>();
+  private injectedClock?: Clock;
+  private clockAdapter!: Clock;
+
+  constructor(clock?: Clock) {
+    super();
+    this.injectedClock = clock;
+  }
 
   onCreate(options: unknown): void {
+    // Production keeps the behavior-identical Colyseus clock; tests inject a
+    // VirtualClock through the constructor.
+    this.clockAdapter =
+      this.injectedClock ??
+      new ColyseusClock(
+        this.clock as unknown as {
+          setTimeout(cb: () => void, ms: number, ...args: unknown[]): unknown;
+          setInterval(cb: () => void, ms: number, ...args: unknown[]): unknown;
+          clear(): void;
+        },
+      );
+
     // Rooms constructed directly in unit tests bypass the MatchMaker, which is
     // what normally assigns `listing` before onCreate. Stub it so colyseus'
     // dispose path (`listing.remove()` in Room._dispose) is a no-op instead of
@@ -180,6 +199,31 @@ export class HotelRoom extends Room<RoomState> {
     });
   }
 
+  onDispose(): void {
+    this.clockAdapter.clearAll();
+  }
+
+  private now(): number {
+    return this.clockAdapter.now();
+  }
+
+  /** Register (or replace) a one-shot timer under a stable key. */
+  private schedule(key: string, ms: number, fn: () => void): void {
+    const prev = this.timers.get(key);
+    if (prev) prev();
+    const cancel = this.clockAdapter.setTimeout(ms, fn);
+    this.timers.set(key, cancel);
+  }
+
+  /** Cancel and drop the timer registered under a stable key. */
+  private cancel(key: string): void {
+    const c = this.timers.get(key);
+    if (c) {
+      c();
+      this.timers.delete(key);
+    }
+  }
+
   async onJoin(client: Client, options?: unknown): Promise<void> {
     const opts = options as Record<string, unknown> | undefined;
     const rawName = opts?.["name"];
@@ -214,7 +258,7 @@ export class HotelRoom extends Room<RoomState> {
     }
 
     this.clientMap.set(client.sessionId, client);
-    this.lastMoveAt.set(client.sessionId, Date.now());
+    this.lastMoveAt.set(client.sessionId, this.now());
   }
 
   async onLeave(client: Client, _consented?: boolean): Promise<void> {
@@ -253,7 +297,7 @@ export class HotelRoom extends Room<RoomState> {
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
 
-    const now = Date.now();
+    const now = this.now();
     const last = this.lastMoveAt.get(client.sessionId) ?? now;
     const dt = Math.min(MAX_MOVE_DT_S, Math.max(0, (now - last) / 1000));
 
@@ -292,7 +336,7 @@ export class HotelRoom extends Room<RoomState> {
 
     // success: transition to playing, set shift timer, spawn at lobby, assign roles
     this.state.phase = "playing";
-    this.state.shiftEndsAt = Date.now() + this.shiftLengthS * 1000;
+    this.state.shiftEndsAt = this.now() + this.shiftLengthS * 1000;
 
     // lobby gather spawn — all players at lobby center floor 0
     for (const p of this.state.players.values()) {
@@ -322,18 +366,8 @@ export class HotelRoom extends Room<RoomState> {
 
   /** Starts the 1-second interval that checks for the shift buzzer. */
   private startShiftTimer(): void {
-    this.clearShiftTimer();
-    this.shiftTimer = this.clock.setInterval(() => {
-      this.checkBuzzer();
-    }, 1000);
-  }
-
-  private clearShiftTimer(): void {
-    if (this.shiftTimer !== undefined && this.shiftTimer !== null) {
-      const delayed = this.shiftTimer as unknown as { clear?: () => void };
-      if (typeof delayed.clear === "function") delayed.clear();
-      this.shiftTimer = null;
-    }
+    this.cancel("shift");
+    this.timers.set("shift", this.clockAdapter.setInterval(1000, () => this.checkBuzzer()));
   }
 
   /** Shared path for declaring the end of the round. */
@@ -360,13 +394,13 @@ export class HotelRoom extends Room<RoomState> {
       }
     }
 
-    this.clearShiftTimer();
+    this.cancel("shift");
     this.broadcastResults();
   }
 
   private checkBuzzer(): void {
     if (this.state.phase !== "playing") return;
-    if (Date.now() >= this.state.shiftEndsAt) {
+    if (this.now() >= this.state.shiftEndsAt) {
       const preppedCount = [...this.state.rooms.values()].filter((r) => r.state === "prepped").length;
       const coverage = preppedCount / ROOM_COUNT;
       const winner: "staff" | "saboteur" = coverage >= COVERAGE_TARGET ? "staff" : "saboteur";
@@ -422,38 +456,11 @@ export class HotelRoom extends Room<RoomState> {
   }
 
   private scheduleElevatorArrival(shaft: string): void {
-    this.clearElevatorArriveTimeout(shaft);
-    this.elevatorArriveTimeout.set(
-      shaft,
-      this.clock.setTimeout(() => this.handleElevatorArrived(shaft), ELEVATOR_ARRIVE_MS),
-    );
+    this.schedule("arrive:" + shaft, ELEVATOR_ARRIVE_MS, () => this.handleElevatorArrived(shaft));
   }
 
   private scheduleElevatorRide(shaft: string): void {
-    this.clearElevatorRideTimeout(shaft);
-    this.elevatorRideTimeout.set(
-      shaft,
-      this.clock.setTimeout(() => this.handleElevatorRode(shaft), ELEVATOR_RIDE_MS),
-    );
-  }
-
-  private clearElevatorArriveTimeout(shaft: string): void {
-    const t = this.elevatorArriveTimeout.get(shaft);
-    if (t !== undefined && t !== null) {
-      // Clock returns a Delayed instance; we can clear via the clock or cast to Delayed.
-      const delayed = t as unknown as { clear?: () => void };
-      if (typeof delayed.clear === "function") delayed.clear();
-      this.elevatorArriveTimeout.delete(shaft);
-    }
-  }
-
-  private clearElevatorRideTimeout(shaft: string): void {
-    const t = this.elevatorRideTimeout.get(shaft);
-    if (t !== undefined && t !== null) {
-      const delayed = t as unknown as { clear?: () => void };
-      if (typeof delayed.clear === "function") delayed.clear();
-      this.elevatorRideTimeout.delete(shaft);
-    }
+    this.schedule("ride:" + shaft, ELEVATOR_RIDE_MS, () => this.handleElevatorRode(shaft));
   }
 
   private handleCallElevator(client: Client, raw: unknown): void {
@@ -466,7 +473,7 @@ export class HotelRoom extends Room<RoomState> {
     if (!elevator) return;
     const { car, runtime } = elevator;
     if (Math.abs(player.x - getElevatorX(parsed.data.shaft)) > ELEVATOR_INTERACT_RADIUS) return;
-    const now = Date.now();
+    const now = this.now();
 
     const wasIdle = runtime.state === "idle";
     callElevator(runtime, client.sessionId, player.floor, now);
@@ -511,7 +518,7 @@ export class HotelRoom extends Room<RoomState> {
     const elevator = this.getElevator(shaft);
     if (!elevator) return;
     const { car, runtime } = elevator;
-    if (tickArrival(runtime, Date.now())) {
+    if (tickArrival(runtime, this.now())) {
       this.syncElevatorCar(car, runtime);
       this.scheduleElevatorRide(shaft);
     } else if (runtime.state === "arriving") {
@@ -520,14 +527,11 @@ export class HotelRoom extends Room<RoomState> {
       // (clock elapsed leads Date.now by up to one simulation tick). Firing
       // early must re-arm for the remaining delay instead of abandoning the
       // arrival, or the car stays "arriving" forever.
-      const remaining = Math.max(0, runtime.arriveAt - Date.now());
-      this.elevatorArriveTimeout.set(
-        shaft,
-        this.clock.setTimeout(() => this.handleElevatorArrived(shaft), remaining),
-      );
+      const remaining = Math.max(0, runtime.arriveAt - this.now());
+      this.schedule("arrive:" + shaft, remaining, () => this.handleElevatorArrived(shaft));
       return;
     }
-    this.elevatorArriveTimeout.delete(shaft);
+    this.timers.delete("arrive:" + shaft);
   }
 
   private handleElevatorRode(shaft: string): void {
@@ -535,7 +539,7 @@ export class HotelRoom extends Room<RoomState> {
     if (!elevator) return;
     const { car, runtime } = elevator;
     if (runtime.state !== "boarding") {
-      this.elevatorRideTimeout.delete(shaft);
+      this.timers.delete("ride:" + shaft);
       return;
     }
 
@@ -554,7 +558,7 @@ export class HotelRoom extends Room<RoomState> {
     }
 
     this.syncElevatorCar(car, runtime);
-    this.elevatorRideTimeout.delete(shaft);
+    this.timers.delete("ride:" + shaft);
 
     if (runtime.queue.length > 0) {
       this.dequeueNextBatch(shaft);
@@ -568,7 +572,7 @@ export class HotelRoom extends Room<RoomState> {
     const elevator = this.getElevator(shaft);
     if (!elevator) return;
     const { car, runtime } = elevator;
-    startNextCycle(runtime, Date.now());
+    startNextCycle(runtime, this.now());
     this.syncElevatorCar(car, runtime);
     this.scheduleElevatorArrival(shaft);
   }
@@ -597,6 +601,7 @@ export class HotelRoom extends Room<RoomState> {
       room.state,
       isSaboteur,
       alreadyChanneling,
+      this.now(),
     );
 
     if (!result.ok) {
@@ -611,17 +616,14 @@ export class HotelRoom extends Room<RoomState> {
   }
 
   private startChannel(sessionId: string, channel: Channel): void {
-    this.clearChannelTimeout(sessionId);
+    this.cancel("channel:" + sessionId);
     const player = this.state.players.get(sessionId);
     if (player) {
       player.activeChannel = channel.type;
     }
     this.activeChannels.set(sessionId, channel);
-    const delay = Math.max(0, channel.endsAt - Date.now());
-    this.channelTimeouts.set(
-      sessionId,
-      this.clock.setTimeout(() => this.completeChannel(sessionId), delay),
-    );
+    const delay = Math.max(0, channel.endsAt - this.now());
+    this.schedule("channel:" + sessionId, delay, () => this.completeChannel(sessionId));
   }
 
   private handleChannelCancel(client: Client, raw: unknown): void {
@@ -634,7 +636,7 @@ export class HotelRoom extends Room<RoomState> {
   private cancelChannel(sessionId: string): void {
     const channel = this.activeChannels.get(sessionId);
     if (!channel) return;
-    this.clearChannelTimeout(sessionId);
+    this.cancel("channel:" + sessionId);
     this.activeChannels.delete(sessionId);
     const player = this.state.players.get(sessionId);
     if (player) {
@@ -643,7 +645,7 @@ export class HotelRoom extends Room<RoomState> {
   }
 
   private completeChannel(sessionId: string): void {
-    this.channelTimeouts.delete(sessionId);
+    this.timers.delete("channel:" + sessionId);
     const channel = this.activeChannels.get(sessionId);
     if (!channel) return;
     const player = this.state.players.get(sessionId);
@@ -664,15 +666,6 @@ export class HotelRoom extends Room<RoomState> {
     room.state = applyChannelCompletion(channel.type, room.state);
     this.activeChannels.delete(sessionId);
     player.activeChannel = null;
-  }
-
-  private clearChannelTimeout(sessionId: string): void {
-    const t = this.channelTimeouts.get(sessionId);
-    if (t !== undefined && t !== null) {
-      const delayed = t as unknown as { clear?: () => void };
-      if (typeof delayed.clear === "function") delayed.clear();
-      this.channelTimeouts.delete(sessionId);
-    }
   }
 
   /**

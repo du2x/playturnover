@@ -44,6 +44,9 @@ export type ChannelStartResult = ChannelOk | ChannelFail;
  * - prep: room state must be clean
  * - unprep: caller is saboteur and room state is prepped or trashed
  * - fake: caller is saboteur (any room state)
+ *
+ * `now` is the current wall time supplied by the caller, so this function is
+ * fully pure (no time reads inside).
  */
 export function canStartChannel(
   type: ChannelType,
@@ -54,6 +57,7 @@ export function canStartChannel(
   roomState: RoomStateType,
   isSaboteur: boolean,
   alreadyChanneling: boolean,
+  now: number,
 ): ChannelStartResult {
   if (phase !== "playing") {
     return { ok: false, reason: "not-playing" };
@@ -84,7 +88,6 @@ export function canStartChannel(
     }
   }
 
-  const now = Date.now();
   const duration = type === "unprep" ? UNPREP_TIME_MS : PREP_TIME_MS;
   return {
     ok: true,
