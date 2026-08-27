@@ -30,7 +30,13 @@ export const Room = colyseusPkg.Room as unknown as abstract new <T extends objec
   onJoin(client: import("colyseus").Client, options?: unknown): void | Promise<void>;
   onLeave(client: import("colyseus").Client, consented?: boolean): void | Promise<void>;
 };
-export const Server = colyseusPkg.Server as unknown as new (options: { server: unknown }) => {
+export const Server = colyseusPkg.Server as unknown as new (options?: {
+  server?: unknown;
+  transport?: {
+    constructor?: { name?: string };
+  };
+}) => {
+  transport?: { constructor?: { name?: string } };
   define: (name: string, room: unknown) => void;
   gracefullyShutdown?: () => Promise<void>;
 };

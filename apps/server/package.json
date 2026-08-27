@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@colyseus/schema": "^2.0.37",
+    "@colyseus/ws-transport": "^0.15.3",
     "@grandhotel/shared": "workspace:*",
     "colyseus": "^0.15.57",
     "express": "^4.19.2",

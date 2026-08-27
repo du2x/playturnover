@@ -1,4 +1,5 @@
 import express from "express";
+import { WebSocketTransport } from "@colyseus/ws-transport";
 import { Server } from "./colyseus-compat.js";
 import { createServer } from "http";
 import { HotelRoom } from "./rooms/HotelRoom.js";
@@ -29,10 +30,19 @@ export function createGameServer(): {
 } {
   const app = createApp();
   const httpServer = createServer(app);
-  const gameServer = new Server({ server: httpServer });
+  const gameServer = new Server({
+    transport: new WebSocketTransport({ server: httpServer }),
+  });
   gameServer.define("hotel", HotelRoom);
   return { app, httpServer, gameServer };
 }
+
+export { HotelRoom } from "./rooms/HotelRoom.js";
+export * from "./telemetry.js";
+export * from "./time.js";
+export * from "./channels.js";
+export * from "./elevator.js";
+export * from "./shift.js";
 
 const PORT = Number(process.env.PORT ?? 2567);
 

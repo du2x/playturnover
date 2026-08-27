@@ -45,6 +45,9 @@ importers:
       '@colyseus/schema':
         specifier: ^2.0.37
         version: 2.0.37
+      '@colyseus/ws-transport':
+        specifier: ^0.15.3
+        version: 0.15.3(@colyseus/core@0.15.57(@colyseus/schema@2.0.37))(@colyseus/schema@2.0.37)
       '@grandhotel/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -95,6 +98,9 @@ importers:
       '@colyseus/schema':
         specifier: ^2.0.37
         version: 2.0.37
+      '@colyseus/ws-transport':
+        specifier: ^0.15.3
+        version: 0.15.3(@colyseus/core@0.15.57(@colyseus/schema@2.0.37))(@colyseus/schema@2.0.37)
       '@grandhotel/server':
         specifier: workspace:*
         version: link:../apps/server
