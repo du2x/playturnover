@@ -1,9 +1,12 @@
 import Phaser from "phaser";
-import type { TrashFreshness } from "@grandhotel/shared";
+import type { ElevatorShaft, TrashFreshness } from "@grandhotel/shared";
 import {
+  AVATAR_BODY_SIZE_PX,
   AVATAR_COLORS,
+  AVATAR_LABEL_FONT_SIZE_PX,
   ELEVATOR_A_X,
   ELEVATOR_B_X,
+  ELEVATOR_RIDE_MS,
   FLOOR_COUNT,
   FLOOR_Y_STEP,
   HALLWAY_MAX_X,
@@ -17,10 +20,16 @@ import {
 } from "@grandhotel/shared";
 import { getAllRoomIds, getHallBounds, getRoomAt, getRoomRect, isInsideRoom } from "@grandhotel/shared";
 import { step } from "../movement/horizontal.js";
+import {
+  deriveAvatarVisuals,
+  FLOOR_TINT_HEXES,
+  MARKER_COLORS,
+  parseHexColor,
+} from "./avatarIdentity.js";
 
-function parseHexColor(hex: string): number {
-  const h = hex.startsWith("#") ? hex.slice(1) : hex;
-  return Number.parseInt(h, 16);
+interface RemoteAvatar {
+  rect: Phaser.GameObjects.Rectangle;
+  label: Phaser.GameObjects.Text;
 }
 
 /**
@@ -39,7 +48,9 @@ export class HallScene extends Phaser.Scene {
   private elevatorShafts: Phaser.GameObjects.Rectangle[] = [];
   private elevatorCallButtons: Phaser.GameObjects.Rectangle[] = [];
   private localRect?: Phaser.GameObjects.Rectangle;
-  private remotes = new Map<string, Phaser.GameObjects.Rectangle>();
+  private localLabel?: Phaser.GameObjects.Text;
+  private localName = "";
+  private remotes = new Map<string, RemoteAvatar>();
   private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd?: {
     W: Phaser.Input.Keyboard.Key;
@@ -47,6 +58,17 @@ export class HallScene extends Phaser.Scene {
     S: Phaser.Input.Keyboard.Key;
     D: Phaser.Input.Keyboard.Key;
   };
+  private spaceKey?: Phaser.Input.Keyboard.Key;
+  // ── Elevator car visuals ─────────────────────────────────────────────────
+  // Cars slide continuously between floor strips; riders render inside.
+  private elevatorCars = new Map<
+    ElevatorShaft,
+    { rect: Phaser.GameObjects.Rectangle; displayFloor: number; syncedOnce?: boolean }
+  >();
+  private latestCarFloors: Record<ElevatorShaft, number> = { A: 0, B: 0 };
+  private localRideShaft?: ElevatorShaft;
+  private localRideStartedAt = -Infinity;
+  private localPendingFloor?: number;
   private localX: number;
   private localFloor = 0;
   private localColorIndex = 0;
@@ -89,13 +111,13 @@ export class HallScene extends Phaser.Scene {
       const width = bounds.maxX - bounds.minX;
       const height = 40;
 
-      // Gray hallway strip
+      // Per-floor tinted hallway strip (lobby 0 + guest floors)
       const rect = this.add.rectangle(
         (bounds.minX + bounds.maxX) / 2,
         bounds.y,
         width,
         height,
-        0x888888,
+        FLOOR_TINT_HEXES[floor],
       );
       this.hallwayRects.push(rect);
 
@@ -136,15 +158,17 @@ export class HallScene extends Phaser.Scene {
           roomGfx.setStrokeStyle(1, 0x555555);
           this.roomRects.push(roomGfx);
 
-          // Door line (vertical line at room center x, spanning hallway height)
+          // Door line (vertical line at room center x, spanning hallway height).
+          // Brightened + thickened for readability (M4.2.2) — hit-areas and
+          // state logic untouched.
           const doorX = (roomRect.xMin + roomRect.xMax) / 2;
           const doorLine = this.add.line(
             0, 0,
             doorX, roomRect.y - 20,
             doorX, roomRect.y + 20,
-            0x444444,
+            0xeeeeee,
           );
-          doorLine.setLineWidth(2);
+          doorLine.setLineWidth(3);
           this.roomDoorLines.push(doorLine);
 
           // State tint overlay — drawn on top of the room rect, hidden until
@@ -165,7 +189,7 @@ export class HallScene extends Phaser.Scene {
             doorX + 18,
             roomRect.y + 12,
             10, 6,
-            0xb00020,
+            MARKER_COLORS.roomTrashed,
             0,
           );
           this.trashIndicators.set(roomId, trashMarker);
@@ -176,7 +200,7 @@ export class HallScene extends Phaser.Scene {
             doorX - 14,
             roomRect.y - 14,
             12, 7,
-            0xd9a03c,
+            MARKER_COLORS.doorCard,
             0,
           );
           this.doorCardIndicators.set(roomId, cardMarker);
@@ -195,6 +219,15 @@ export class HallScene extends Phaser.Scene {
       shaftARect.setStrokeStyle(2, 0x333333);
       this.elevatorShafts.push(shaftARect);
 
+      // Shaft A label (presentation only, M4.2.2)
+      const shaftALabel = this.add.text(
+        ELEVATOR_A_X,
+        bounds.y,
+        "A",
+        { fontSize: "14px", color: "#eeeeee", fontFamily: "monospace" },
+      );
+      shaftALabel.setOrigin(0.5);
+
       // Shaft B (east)
       const shaftBRect = this.add.rectangle(
         ELEVATOR_B_X,
@@ -205,6 +238,15 @@ export class HallScene extends Phaser.Scene {
       );
       shaftBRect.setStrokeStyle(2, 0x333333);
       this.elevatorShafts.push(shaftBRect);
+
+      // Shaft B label (presentation only, M4.2.2)
+      const shaftBLabel = this.add.text(
+        ELEVATOR_B_X,
+        bounds.y,
+        "B",
+        { fontSize: "14px", color: "#eeeeee", fontFamily: "monospace" },
+      );
+      shaftBLabel.setOrigin(0.5);
 
       // Elevator call buttons (clickable rects above each shaft)
       const buttonWidth = 40;
@@ -217,7 +259,7 @@ export class HallScene extends Phaser.Scene {
         buttonY,
         buttonWidth,
         buttonHeight,
-        0x448844,
+        MARKER_COLORS.elevatorButton,
       );
       btnA.setInteractive({ useHandCursor: true });
       btnA.on("pointerdown", () => this.emitElevatorCall("A"));
@@ -229,11 +271,28 @@ export class HallScene extends Phaser.Scene {
         buttonY,
         buttonWidth,
         buttonHeight,
-        0x448844,
+        MARKER_COLORS.elevatorButton,
       );
       btnB.setInteractive({ useHandCursor: true });
       btnB.on("pointerdown", () => this.emitElevatorCall("B"));
       this.elevatorCallButtons.push(btnB);
+    }
+
+    // One car per shaft, sliding vertically between floor strips. Created
+    // after shafts/buttons but before avatars, so riders render on top.
+    for (const shaft of ["A", "B"] as const) {
+      const rect = this.add.rectangle(
+        shaft === "A" ? ELEVATOR_A_X : ELEVATOR_B_X,
+        HALLWAY_Y,
+        28,
+        34,
+        0x1f1f1f,
+      );
+      rect.setStrokeStyle(2, 0xdddddd);
+      this.elevatorCars.set(shaft, {
+        rect,
+        displayFloor: 0,
+      });
     }
   }
 
@@ -241,6 +300,14 @@ export class HallScene extends Phaser.Scene {
     if (this.elevatorButtonCallback) {
       this.elevatorButtonCallback(shaft);
     }
+  }
+
+  /** Nearest shaft to the local avatar (server still enforces interact radius). */
+  getNearestShaft(): "A" | "B" {
+    return Math.abs(this.localX - ELEVATOR_A_X) <=
+      Math.abs(this.localX - ELEVATOR_B_X)
+      ? "A"
+      : "B";
   }
 
   private setupInput(): void {
@@ -252,29 +319,129 @@ export class HallScene extends Phaser.Scene {
         S: this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S),
         D: this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D),
       };
+      this.spaceKey = this.input.keyboard.addKey(
+        Phaser.Input.Keyboard.KeyCodes.SPACE,
+      );
     }
   }
 
-  private spawnLocalAvatar(): void {
-    const localColor = parseHexColor(
-      AVATAR_COLORS[this.localColorIndex % AVATAR_COLORS.length],
+  /**
+   * Creates one enlarged labeled avatar (M4.2.2): AVATAR_BODY_SIZE_PX square
+   * filled with the player color plus a non-interactive Text initial. No
+   * physics bodies — plain GameObjects moved by direct x/y assignment.
+   */
+  private createAvatarBody(
+    x: number,
+    y: number,
+    name: string,
+    colorIndex: number,
+  ): RemoteAvatar {
+    const visuals = deriveAvatarVisuals(name, colorIndex);
+    const rect = this.add.rectangle(
+      x,
+      y,
+      AVATAR_BODY_SIZE_PX,
+      AVATAR_BODY_SIZE_PX,
+      parseHexColor(visuals.colorHex),
     );
+    const label = this.add.text(x, y, visuals.initial, {
+      fontSize: `${AVATAR_LABEL_FONT_SIZE_PX}px`,
+      color: "#ffffff",
+      fontFamily: "monospace",
+    });
+    label.setOrigin(0.5);
+    return { rect, label };
+  }
+
+  private spawnLocalAvatar(): void {
     const bounds = getHallBounds(this.localFloor);
-    this.localRect = this.add.rectangle(this.localX, bounds.y, 16, 16, localColor);
+    const body = this.createAvatarBody(
+      this.localX,
+      bounds.y,
+      this.localName,
+      this.localColorIndex,
+    );
+    this.localRect = body.rect;
+    this.localLabel = body.label;
     // No body ever — plain GameObject, x/y set directly
   }
 
   override update(_time: number, delta: number): void {
     const dtSec = Math.min(delta, 100) / 1000;
-    const dir = this.getInputDir();
+    this.animateElevatorCars(dtSec);
+    const dir = this.localRideShaft ? 0 : this.getInputDir();
     this.localX = step(this.localX, dir, dtSec, this.localFloor);
-    if (this.localRect) {
-      this.localRect.x = this.localX;
-      // y only changes via setFloor() teleport
-      const bounds = getHallBounds(this.localFloor);
-      this.localRect.y = bounds.y;
+    if (this.spaceKey && Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
+      this.emitElevatorCall(this.getNearestShaft());
+    }
+    const rideEntry =
+      this.localRideShaft && !this.localRideTimedOut(_time)
+        ? (this.elevatorCars.get(this.localRideShaft) ?? null)
+        : null;
+    if (this.localRect && rideEntry) {
+      // Rider stands inside the car while it travels.
+      this.localRect.x = rideEntry.rect.x;
+      this.localRect.y = rideEntry.rect.y - 2;
+      if (this.localLabel) {
+        this.localLabel.x = rideEntry.rect.x;
+        this.localLabel.y = rideEntry.rect.y - 14;
+      }
+      this.trySettleLocalRide(_time);
+    } else {
+      if (this.localRideShaft && !rideEntry) {
+        // Ride never landed (e.g. queued for a later cycle) — restore hallway
+        // rendering rather than leaving the avatar stuck inside a car.
+        this.cancelLocalRide();
+      }
+      if (this.localRect) {
+        this.localRect.x = this.localX;
+        // y only changes via setFloor() teleport
+        const bounds = getHallBounds(this.localFloor);
+        this.localRect.y = bounds.y;
+        if (this.localLabel) {
+          this.localLabel.x = this.localX;
+          this.localLabel.y = bounds.y;
+        }
+      }
     }
     this.applyRoomVisuals();
+  }
+
+  /** Slides each car toward its authoritative floor, one strip per ride time. */
+  private animateElevatorCars(dtSec: number): void {
+    const floorsPerSec = 1000 / ELEVATOR_RIDE_MS;
+    for (const [shaft, entry] of this.elevatorCars) {
+      const target = this.latestCarFloors[shaft];
+      const diff = target - entry.displayFloor;
+      const maxStep = floorsPerSec * dtSec;
+      entry.displayFloor =
+        Math.abs(diff) <= maxStep
+          ? target
+          : entry.displayFloor + Math.sign(diff) * maxStep;
+      entry.rect.y = HALLWAY_Y + entry.displayFloor * FLOOR_Y_STEP;
+      entry.rect.setAlpha(Math.abs(diff) > 0.001 ? 1 : 0.85);
+    }
+  }
+
+  private localRideTimedOut(nowMs: number): boolean {
+    return nowMs - this.localRideStartedAt > ELEVATOR_RIDE_MS * 3;
+  }
+
+  private trySettleLocalRide(_nowMs?: number): void {
+    if (this.localPendingFloor === undefined || !this.localRideShaft) return;
+    const shaft = this.localRideShaft;
+    const entry = this.elevatorCars.get(shaft);
+    if (!entry || entry.displayFloor !== this.latestCarFloors[shaft]) return;
+    const pending = this.localPendingFloor;
+    this.cancelLocalRide();
+    // Offboard exactly at the shaft, not the corridor center.
+    this.applyLocalFloor(pending, shaft === "A" ? ELEVATOR_A_X : ELEVATOR_B_X);
+  }
+
+  private cancelLocalRide(): void {
+    this.localRideShaft = undefined;
+    this.localPendingFloor = undefined;
+    this.localRideStartedAt = -Infinity;
   }
 
   /** Applies latest known room states/evidence with FR-10 visibility gating. */
@@ -296,10 +463,10 @@ export class HallScene extends Phaser.Scene {
       }
       const state = this.latestRoomStates[roomId] ?? null;
       if (state === "prepped") {
-        overlay.fillColor = 0x2a9d2a;
+        overlay.fillColor = MARKER_COLORS.roomPrepped;
         overlay.setAlpha(0.35);
       } else if (state === "trashed") {
-        overlay.fillColor = 0xb00020;
+        overlay.fillColor = MARKER_COLORS.roomTrashed;
         overlay.setAlpha(0.45);
       } else {
         overlay.setAlpha(0);
@@ -311,7 +478,9 @@ export class HallScene extends Phaser.Scene {
         continue;
       }
       marker.fillColor =
-        this.latestFreshness[roomId] === "fresh" ? 0xff2020 : 0x666666;
+        this.latestFreshness[roomId] === "fresh"
+          ? MARKER_COLORS.trashFresh
+          : MARKER_COLORS.trashSettled;
       marker.setAlpha(1);
     }
     // Door cards are permanent hallway evidence — no interior gating.
@@ -372,21 +541,19 @@ export class HallScene extends Phaser.Scene {
 
   // ── Exposed API for net layer ────────────────────────────────────────────
 
-  addRemote(id: string, colorIndex: number, floor = 0): void {
+  addRemote(id: string, colorIndex: number, floor = 0, name = ""): void {
     if (this.remotes.has(id)) return;
-    const color = parseHexColor(
-      AVATAR_COLORS[colorIndex % AVATAR_COLORS.length],
-    );
     const bounds = getHallBounds(floor);
     const x = (bounds.minX + bounds.maxX) / 2;
-    const rect = this.add.rectangle(x, bounds.y, 16, 16, color);
-    this.remotes.set(id, rect);
+    const body = this.createAvatarBody(x, bounds.y, name, colorIndex);
+    this.remotes.set(id, body);
   }
 
   setRemoteX(id: string, x: number): void {
     const r = this.remotes.get(id);
     if (r) {
-      r.x = x;
+      r.rect.x = x;
+      r.label.x = x;
       // y stays at current floor's hallway y (floor tracked separately if needed)
     }
   }
@@ -395,14 +562,16 @@ export class HallScene extends Phaser.Scene {
     const r = this.remotes.get(id);
     if (r) {
       const bounds = getHallBounds(floor);
-      r.y = bounds.y;
+      r.rect.y = bounds.y;
+      r.label.y = bounds.y;
     }
   }
 
   removeRemote(id: string): void {
     const r = this.remotes.get(id);
     if (r) {
-      r.destroy();
+      r.rect.destroy();
+      r.label.destroy();
       this.remotes.delete(id);
     }
   }
@@ -416,12 +585,27 @@ export class HallScene extends Phaser.Scene {
   }
 
   setLocalFloor(floor: number): void {
+    if (this.localRideShaft) {
+      // Authoritative floor arrived mid-ride; hold it until the car settles
+      // visually, then apply (keeps the avatar inside the moving car).
+      this.localPendingFloor = floor;
+      return;
+    }
+    this.applyLocalFloor(floor);
+  }
+
+  private applyLocalFloor(floor: number, xOverride?: number): void {
     this.localFloor = floor;
     const bounds = getHallBounds(floor);
-    this.localX = bounds.minX + (bounds.maxX - bounds.minX) / 2; // center of hallway
+    this.localX =
+      xOverride ?? bounds.minX + (bounds.maxX - bounds.minX) / 2; // hallway center
     if (this.localRect) {
       this.localRect.x = this.localX;
       this.localRect.y = bounds.y;
+    }
+    if (this.localLabel) {
+      this.localLabel.x = this.localX;
+      this.localLabel.y = bounds.y;
     }
   }
 
@@ -449,12 +633,53 @@ export class HallScene extends Phaser.Scene {
     this.elevatorButtonCallback = callback;
   }
 
+  /** Push latest authoritative elevator car data (floor drives the visuals). */
+  syncElevators(
+    view: Record<ElevatorShaft, { floor: number; state: string }>,
+  ): void {
+    for (const shaft of ["A", "B"] as const) {
+      const data = view[shaft];
+      if (!data) continue;
+      this.latestCarFloors[shaft] = data.floor;
+      const entry = this.elevatorCars.get(shaft);
+      if (entry && !entry.syncedOnce) {
+        entry.displayFloor = data.floor;
+        entry.syncedOnce = true;
+      }
+    }
+  }
+
+  /**
+   * Marks the local avatar as riding the given shaft: rendered inside the
+   * car until it settles at the destination (or the ride times out).
+   */
+  beginLocalRide(shaft: ElevatorShaft, nowMs?: number): void {
+    this.localRideShaft = shaft;
+    this.localRideStartedAt =
+      nowMs ??
+      (typeof performance !== "undefined" ? performance.now() : Date.now());
+  }
+
   /** For tests: allow setting local color before create */
   setLocalColorIndex(idx: number): void {
     this.localColorIndex = idx;
     if (this.localRect) {
       this.localRect.fillColor = parseHexColor(
-        AVATAR_COLORS[idx % AVATAR_COLORS.length],
+        deriveAvatarVisuals(this.localName, idx).colorHex,
+      );
+    }
+  }
+
+  /**
+   * Sets the local player's display name so the avatar label shows the
+   * initial (M4.2.2). Optional hook — existing callers work unchanged with
+   * the "?" fallback until wired.
+   */
+  setLocalPlayerName(name: string): void {
+    this.localName = name;
+    if (this.localLabel && this.localRect) {
+      this.localLabel.setText(
+        deriveAvatarVisuals(name, this.localColorIndex).initial,
       );
     }
   }

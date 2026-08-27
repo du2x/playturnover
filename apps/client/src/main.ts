@@ -8,10 +8,12 @@ import {
   ACCUSATION_RANGE_TILES,
   CHANNEL_DURATIONS,
   CLIENT_INPUT_SEND_HZ,
+  ELEVATOR_INTERACT_RADIUS,
   PLAYER_SPEED_PX_S,
 } from "@grandhotel/shared";
 import {
   FLOOR_Y_STEP,
+  getElevatorX,
   HALLWAY_Y,
   RUSTLE_RANGE_TILES,
   TILE_SIZE_PX,
@@ -48,6 +50,37 @@ type ActiveAccusation = {
 };
 let accusationActive: ActiveAccusation | null = null;
 let accusationKeyHeld = false;
+
+// Boarding intent from the 0-3 keys (first rider sets the ride destination).
+// Calls immediately; rides once the car reports "boarding" on our floor.
+type PendingRide = { shaft: "A" | "B"; destFloor: number };
+let pendingRide: PendingRide | null = null;
+
+function tryAutoRide(view: RoomStateView): void {
+  if (!pendingRide || !hallScene) return;
+  const car = view.elevatorsView[pendingRide.shaft];
+  if (!car || car.state !== "boarding" || car.floor !== view.myFloor) return;
+  client.rideElevator(pendingRide.shaft, pendingRide.destFloor);
+  hallScene.beginLocalRide(pendingRide.shaft);
+  pendingRide = null;
+}
+
+function requestBoard(destFloor: number): void {
+  const view = uiState.screen === "inRoom" ? uiState.view : null;
+  if (!view || (view.phase !== "waiting" && view.phase !== "playing")) return;
+  if (!hallScene) return;
+  const shaft = hallScene.getNearestShaft();
+  const elevatorX = getElevatorX(shaft);
+  // Server rejects out-of-range boardings silently; keep intents local-only.
+  if (
+    Math.abs(hallScene.getLocalX() - elevatorX) > ELEVATOR_INTERACT_RADIUS
+  ) {
+    return;
+  }
+  client.callElevator(shaft);
+  pendingRide = { shaft, destFloor };
+  tryAutoRide(view);
+}
 
 function isFiredOrSpectator(view: RoomStateView | null): boolean {
   if (!view) return false;
@@ -500,6 +533,12 @@ const handlers = {
 // Wire client state/event into reducer — roster re-render, phase label, host buttons, toast
 client.onState((view: RoomStateView) => {
   dispatch({ type: "stateUpdate", view });
+  hallScene?.syncElevators(view.elevatorsView);
+  if (view.phase === "results") {
+    pendingRide = null;
+  } else {
+    tryAutoRide(view);
+  }
 });
 
 client.onEvent((ev) => {
@@ -509,6 +548,16 @@ client.onEvent((ev) => {
 
 // Keyboard hold actions (channels and accusations). Mirrors the on-screen controls.
 function onKeyDown(e: KeyboardEvent): void {
+  if (e.repeat) return;
+  const digit = "0123".indexOf(e.key);
+  if (digit >= 0) {
+    // Elevators run pre-round too; digits only need the fired/spectator gate.
+    const preView = uiState.screen === "inRoom" ? uiState.view : null;
+    if (!preView || isFiredOrSpectator(preView)) return;
+    requestBoard(digit);
+    e.preventDefault();
+    return;
+  }
   if (channelKeyHeld || accusationKeyHeld) return;
   if (!hallScene) return;
   if (resultsFrozen) return;
@@ -516,7 +565,6 @@ function onKeyDown(e: KeyboardEvent): void {
   const view = uiState.view;
   if (!view || view.phase !== "playing") return;
   if (isFiredOrSpectator(view)) return;
-  if (e.repeat) return;
   if (e.key.toLowerCase() !== "e") return;
 
   const now =
@@ -588,6 +636,7 @@ function onKeyUp(e: KeyboardEvent): void {
 }
 
 function onWindowBlur(): void {
+  pendingRide = null;
   if (accusationActive || accusationKeyHeld) {
     clearAccusationActive();
     const bar = getChannelBar();
