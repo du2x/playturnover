@@ -108,27 +108,40 @@ describe("Spectator UI (R-5, V-4)", () => {
 
     renderOverlay(overlay, state, handlers);
 
-    const roster = overlay.querySelector("#roster");
+    // Roster lives in the dedicated top HUD bar since the HUD overhaul
+    const roster = overlay.querySelector("#hud-roster");
     expect(roster).not.toBeNull();
     const badges = roster?.querySelectorAll(".spectator-badge");
     expect(badges?.length).toBe(1);
     expect(badges?.[0]?.textContent).toContain("Fired");
   });
 
-  it("renders all 24 rooms with observable states for full-building overview", () => {
+  it("no longer renders HTML room-state list or evidence panel (moved to Phaser diegetic visuals)", () => {
     const view = makeSpectatorView();
     const state: UIState = { screen: "inRoom", name: "Alice", code: "ABCD", view };
 
     renderOverlay(overlay, state, handlers);
 
-    const roomList = overlay.querySelector("#room-states");
-    expect(roomList).not.toBeNull();
-    const roomItems = roomList?.querySelectorAll("li");
-    expect(roomItems?.length).toBe(24);
+    // Room observability moved into HallScene tints/markers (FR-10/FR-20 gating);
+    // the HTML oracle lists were removed rather than exposed (#room-states,
+    // #evidence-panel were hidden panels before the HUD overhaul).
+    expect(overlay.querySelector("#room-states")).toBeNull();
+    expect(overlay.querySelector("#evidence-panel")).toBeNull();
+  });
 
-    const preppedRoom = roomList?.querySelector('[data-room="1-0"]');
-    expect(preppedRoom?.textContent).toContain("prepped");
-    const trashedRoom = roomList?.querySelector('[data-room="2-3"]');
-    expect(trashedRoom?.textContent).toContain("trashed");
+  it("renders HUD bar with phase, floor, code and elevator chips", () => {
+    const view = makeSpectatorView();
+    const state: UIState = { screen: "inRoom", name: "Alice", code: "ABCD", view };
+
+    renderOverlay(overlay, state, handlers);
+
+    const hudBar = overlay.querySelector("#hud-bar");
+    expect(hudBar).not.toBeNull();
+    expect(hudBar?.querySelector("#hud-phase")?.textContent).toContain("SHIFT");
+    expect(hudBar?.querySelector("#hud-floor")?.textContent).toContain("1F");
+    expect(hudBar?.querySelector("#hud-code")?.textContent).toContain("ABCD");
+    const elevators = hudBar?.querySelector("#hud-elevators")?.textContent ?? "";
+    expect(elevators).toContain("A");
+    expect(elevators).toContain("B");
   });
 });

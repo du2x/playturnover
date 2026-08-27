@@ -24,6 +24,9 @@ export function createButton(
 ): HTMLButtonElement {
   const btn = createEl("button", { id: opts?.id, className: opts?.className, text: label });
   btn.disabled = !!opts?.disabled;
+  // Prevent the button from stealing keyboard focus on click (WASD / hold-E
+  // listeners live at window level and must keep firing during play).
+  btn.addEventListener("mousedown", (e) => e.preventDefault());
   btn.addEventListener("click", onClick);
   return btn;
 }

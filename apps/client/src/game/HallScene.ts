@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import type { TrashFreshness } from "@grandhotel/shared";
 import {
   AVATAR_COLORS,
   ELEVATOR_A_X,
@@ -50,6 +51,21 @@ export class HallScene extends Phaser.Scene {
   private localFloor = 0;
   private localColorIndex = 0;
   private elevatorButtonCallback?: (shaft: "A" | "B") => void;
+  // ── Room-state / evidence visuals (diegetic layer) ────────────────────────
+  private roomStateOverlays = new Map<string, Phaser.GameObjects.Rectangle>();
+  private trashIndicators = new Map<string, Phaser.GameObjects.Rectangle>();
+  private doorCardIndicators = new Map<string, Phaser.GameObjects.Rectangle>();
+  private latestRoomStates: Record<string, string | null> = {};
+  private latestFreshness: Record<string, TrashFreshness> = {};
+  private doorCards = new Map<string, boolean>();
+  // Spectators/fired players see the full building (PRD FR-20): disable the
+  // FR-10 interior gating when true.
+  private overviewMode = false;
+
+  /** Enables full-building interior visibility (spectator overview). */
+  setOverviewMode(on: boolean): void {
+    this.overviewMode = on;
+  }
 
   constructor() {
     super({ key: "Hall" });
@@ -130,6 +146,40 @@ export class HallScene extends Phaser.Scene {
           );
           doorLine.setLineWidth(2);
           this.roomDoorLines.push(doorLine);
+
+          // State tint overlay — drawn on top of the room rect, hidden until
+          // the local avatar is inside the room (FR-10: state readable from
+          // inside only). Clean renders as no tint.
+          const stateOverlay = this.add.rectangle(
+            (roomRect.xMin + roomRect.xMax) / 2,
+            roomRect.y,
+            roomRect.xMax - roomRect.xMin,
+            40,
+            0x777777,
+            0,
+          );
+          this.roomStateOverlays.set(roomId, stateOverlay);
+
+          // Trash freshness marker (interior cue, same FR-10 gating).
+          const trashMarker = this.add.rectangle(
+            doorX + 18,
+            roomRect.y + 12,
+            10, 6,
+            0xb00020,
+            0,
+          );
+          this.trashIndicators.set(roomId, trashMarker);
+
+          // Door status card marker — permanent door evidence (FR-11),
+          // visible from the hallway next to the door.
+          const cardMarker = this.add.rectangle(
+            doorX - 14,
+            roomRect.y - 14,
+            12, 7,
+            0xd9a03c,
+            0,
+          );
+          this.doorCardIndicators.set(roomId, cardMarker);
         }
       }
 
@@ -224,6 +274,83 @@ export class HallScene extends Phaser.Scene {
       const bounds = getHallBounds(this.localFloor);
       this.localRect.y = bounds.y;
     }
+    this.applyRoomVisuals();
+  }
+
+  /** Applies latest known room states/evidence with FR-10 visibility gating. */
+  private applyRoomVisuals(): void {
+    // Only the room the local avatar is standing in reveals its interior
+    // (PRD FR-10 / pillar "information has travel cost") — unless the local
+    // player is a spectator with full-building overview (FR-20).
+    const revealAll = this.overviewMode;
+    let currentRoom: string | null = null;
+    try {
+      currentRoom = this.getCurrentRoom();
+    } catch {
+      currentRoom = null;
+    }
+    for (const [roomId, overlay] of this.roomStateOverlays) {
+      if (roomId !== currentRoom && !revealAll) {
+        overlay.setAlpha(0);
+        continue;
+      }
+      const state = this.latestRoomStates[roomId] ?? null;
+      if (state === "prepped") {
+        overlay.fillColor = 0x2a9d2a;
+        overlay.setAlpha(0.35);
+      } else if (state === "trashed") {
+        overlay.fillColor = 0xb00020;
+        overlay.setAlpha(0.45);
+      } else {
+        overlay.setAlpha(0);
+      }
+    }
+    for (const [roomId, marker] of this.trashIndicators) {
+      if ((roomId !== currentRoom && !revealAll) || !this.latestFreshness[roomId]) {
+        marker.setAlpha(0);
+        continue;
+      }
+      marker.fillColor =
+        this.latestFreshness[roomId] === "fresh" ? 0xff2020 : 0x666666;
+      marker.setAlpha(1);
+    }
+    // Door cards are permanent hallway evidence — no interior gating.
+    for (const [roomId, marker] of this.doorCardIndicators) {
+      const evidenceHasCard = this.doorCards.get(roomId) === true;
+      marker.setAlpha(evidenceHasCard ? 1 : 0);
+    }
+  }
+
+  /**
+   * Push the authoritative roomsView snapshot; visuals are applied on
+   * the next scene update using local-position gating.
+   */
+  syncRoomStates(states: Record<string, string | null>): void {
+    this.latestRoomStates = { ...states };
+  }
+
+  /** Push the evidenceView snapshot (card presence + trash freshness). */
+  syncEvidence(
+    evidence: Record<
+      string,
+      { card?: { present?: boolean }; freshness?: TrashFreshness | null }
+    >,
+  ): void {
+    this.latestFreshness = {};
+    for (const key of this.doorCards.keys()) this.doorCards.set(key, false);
+    for (const [roomId, ev] of Object.entries(evidence)) {
+      if (!ev) continue;
+      this.latestFreshness[roomId] = ev.freshness ?? null;
+      this.doorCards.set(roomId, ev.card?.present === true);
+    }
+  }
+
+  /** Resets all room-state/evidence visuals (phase transitions). */
+  clearRoundVisuals(): void {
+    this.latestRoomStates = {};
+    this.latestFreshness = {};
+    this.doorCards.clear();
+    this.applyRoomVisuals();
   }
 
   private getInputDir(): -1 | 0 | 1 {

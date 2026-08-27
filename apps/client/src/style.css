@@ -11,6 +11,8 @@ body {
     sans-serif;
   background: #2b2b2b;
   color: #eee;
+  /* Keep the canvas and overlay in lockstep: no scrollbars, no page offsets. */
+  overflow: hidden;
 }
 #app {
   width: 960px;
@@ -52,40 +54,79 @@ body {
 #overlay #screen-room > * {
   pointer-events: auto;
 }
-#overlay #screen-room h2,
-#overlay #screen-room #phase-label,
-#overlay #screen-room #roster,
-#overlay #screen-room #floor-indicator,
-#overlay #screen-room #room-code,
-#overlay #screen-room #player-count-hint,
-#overlay #screen-room #host-start-btn,
-#overlay #screen-room #host-info,
-#overlay #screen-room #prompt,
-#overlay #screen-room #room-error {
-  background: rgba(255, 255, 255, 0.85);
-  padding: 4px 8px;
-  margin: 4px 8px;
-  border-radius: 4px;
-  display: inline-block;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-}
-#overlay #screen-room #roster {
-  display: inline-flex;
-}
-#overlay #screen-room #elevator-controls {
+
+/* ── Top HUD bar (single dedicated strip; never blocks canvas input) ── */
+#hud-bar {
   position: absolute;
-  top: 10px;
-  left: 10px;
-  background: rgba(255, 255, 255, 0.9);
-  padding: 6px 10px;
+  top: 0;
+  left: 0;
+  right: 0;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  pointer-events: none;
+  z-index: 15;
+}
+#hud-bar[hidden] {
+  display: none;
+}
+#hud-bar .hud-chip {
+  background: rgba(20, 20, 20, 0.72);
+  color: #fff;
+  padding: 3px 8px;
   border-radius: 4px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
 }
-#overlay #screen-room #evidence-panel {
-  display: none;
+#hud-bar .code-mono {
+  letter-spacing: 0.08em;
 }
-#overlay #screen-room #room-states {
-  display: none;
+#hud-roster {
+  margin-left: auto;
+}
+#hud-roster .roster {
+  margin: 0;
+  padding: 0;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+/* Host pre-round cluster sits centered below the HUD bar */
+#overlay #lobby-panel {
+  position: absolute;
+  top: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.88);
+  padding: 8px 16px;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+#overlay #player-count-hint {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+/* Room-level errors float at the bottom of the playfield */
+#overlay #room-error {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 235, 235, 0.94);
+  color: #b00020;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  white-space: nowrap;
 }
 #overlay h2,
 #overlay h3 {
@@ -162,26 +203,6 @@ body {
   font-family: monospace;
   letter-spacing: 0.1em;
   margin: 6px 0;
-}
-#evidence-panel {
-  margin: 8px 0;
-  padding: 6px;
-  border: 1px solid #aaa;
-  background: #f0f0f0;
-  font-size: 12px;
-}
-#door-cards {
-  color: #6b4a00;
-}
-#trash-freshness.fresh {
-  color: #b00020;
-  font-weight: 700;
-}
-#trash-freshness.settled {
-  color: #555;
-}
-#elevator-controls .elevator-row {
-  margin: 4px 0;
 }
 .hidden {
   display: none !important;
@@ -268,10 +289,16 @@ body {
 }
 
 .spectator-banner {
+  position: absolute;
+  top: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 90%;
   background: #1e293b;
   color: #38bdf8;
   padding: 6px 12px;
-  margin: 8px 0;
+  margin: 0;
   border-radius: 4px;
   font-weight: 600;
   font-size: 13px;
@@ -285,30 +312,19 @@ body {
   font-style: italic;
 }
 
-.accusation-controls {
-  margin: 8px 0;
-  padding: 8px;
-  background: #fef2f2;
-  border: 1px solid #fca5a5;
-  border-radius: 4px;
+/* Mouse fallback dock for in-room work channels (bottom-left) */
+.channel-controls {
+  position: absolute;
+  bottom: 14px;
+  left: 10px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
 }
-
-.accusation-controls strong {
-  display: block;
-  margin-bottom: 6px;
-  color: #991b1b;
-  font-size: 13px;
-}
-
-.accusation-btn {
-  background: #fee2e2 !important;
-  border-color: #ef4444 !important;
-  color: #991b1b !important;
-  font-weight: 600;
-}
-
-.accusation-btn:hover:not(:disabled) {
-  background: #fecaca !important;
+.channel-row {
+  display: flex;
+  gap: 6px;
 }
 
 /* HUD overlays */

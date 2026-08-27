@@ -393,6 +393,26 @@ function syncRoster(view: RoomStateView): void {
   }
 }
 
+// Push room-state/evidence snapshots into the Phaser scene's diegetic layer.
+function syncRoomVisuals(view: RoomStateView): void {
+  if (!hallScene) return;
+  hallScene.setOverviewMode(isFiredOrSpectator(view));
+  if (view.phase === "playing") {
+    hallScene.syncRoomStates(view.roomsView);
+    if (view.evidenceView) {
+      hallScene.syncEvidence(
+        view.evidenceView as Record<
+          string,
+          { card?: { present?: boolean }; freshness?: "fresh" | "settled" | null }
+        >,
+      );
+    }
+  } else {
+    // Waiting/results reset interior tints and evidence markers.
+    hallScene.clearRoundVisuals();
+  }
+}
+
 function dispatch(action: UIAction): void {
   const next = uiReducer(uiState, action);
   uiState = next;
@@ -407,9 +427,11 @@ function dispatch(action: UIAction): void {
     void ensureGameStarted(next.view);
     syncLocalState(next.view);
     syncRoster(next.view);
+    syncRoomVisuals(next.view);
     updateHud(next.view);
   } else {
     resultsFrozen = false;
+    if (hallScene) hallScene.clearRoundVisuals();
   }
 }
 
@@ -453,21 +475,9 @@ const handlers = {
   onStartRound: (): void => {
     client.startRound();
   },
-  onCallElevator: (shaft: "A" | "B"): void => {
-    const currentView = uiState.screen === "inRoom" ? uiState.view : null;
-    if (resultsFrozen || isFiredOrSpectator(currentView)) return;
-    client.callElevator(shaft);
-  },
-  onRideElevator: (shaft: "A" | "B", destFloor: number): void => {
-    const currentView = uiState.screen === "inRoom" ? uiState.view : null;
-    if (resultsFrozen || isFiredOrSpectator(currentView)) return;
-    client.rideElevator(shaft, destFloor);
-  },
-  onAccuse: (targetSessionId: string): void => {
-    const currentView = uiState.screen === "inRoom" ? uiState.view : null;
-    if (resultsFrozen || isFiredOrSpectator(currentView)) return;
-    client.accuse(targetSessionId);
-  },
+  // Elevator calls come from the in-world Phaser buttons (ensureGameStarted
+  // wiring); accusations and channels run through hold-E listeners below —
+  // none of these need HTML overlay handlers anymore.
   onStartChannel: (type: "prep" | "unprep" | "fake", roomId: string): void => {
     const currentView = uiState.screen === "inRoom" ? uiState.view : null;
     if (resultsFrozen || isFiredOrSpectator(currentView)) return;
