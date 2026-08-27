@@ -57,3 +57,8 @@ tmp/
 
 # ---- Fly.io deploy artifacts (keep fly.toml + deploy/ committed) ----
 .fly/
+
+# ---- Orchestrator/playwright local artifacts ----
+.playwright-mcp/
+name-screen.png
+lobby-screen.png
