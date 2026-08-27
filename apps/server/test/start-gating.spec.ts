@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { HALLWAY_MIN_X, HALLWAY_MAX_X, LOBBY_CENTER } from "@grandhotel/shared";
 import { HotelRoom } from "../src/rooms/HotelRoom.js";
+import { VirtualClock } from "../src/time.js";
 
 function mockClient(sessionId: string): any {
   const c: any = { sessionId, _sent: [] as Array<{ type: string; data: unknown }> };
@@ -13,7 +14,8 @@ function mockClient(sessionId: string): any {
 
 describe("start gating", () => {
   it("3 clients startRound rejected stays waiting with need-4-players error", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
     const c0 = mockClient("s0");
     const c1 = mockClient("s1");
@@ -35,7 +37,8 @@ describe("start gating", () => {
   });
 
   it("non-host startRound ignored, phase stays waiting", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
     const c0 = mockClient("s0");
     const c1 = mockClient("s1");
@@ -51,7 +54,8 @@ describe("start gating", () => {
   });
 
   it("4 clients succeeds to playing, positions inside lobby bounds", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
     const clients = [mockClient("s0"), mockClient("s1"), mockClient("s2"), mockClient("s3")];
     for (let i = 0; i < clients.length; i++) {
@@ -64,11 +68,10 @@ describe("start gating", () => {
     room.state.players.get("s2")!.floor = 1;
 
     const host = clients[0];
-    // stub Date.now for deterministic shiftEndsAt
+    // freeze the virtual clock for deterministic shiftEndsAt
     const now = 1_700_000_000_000;
-    vi.spyOn(Date, "now").mockReturnValue(now);
+    clock.setNow(now);
     (room as any).handleStartRound(host, {});
-    vi.restoreAllMocks();
 
     expect(room.state.phase).toBe("playing");
     expect(room.state.shiftEndsAt).toBe(now + 300 * 1000);
@@ -82,16 +85,16 @@ describe("start gating", () => {
   });
 
   it("shiftLengthSOverride respected", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({ shiftLengthSOverride: 10 });
     const clients = [mockClient("s0"), mockClient("s1"), mockClient("s2"), mockClient("s3")];
     for (let i = 0; i < clients.length; i++) {
       await room.onJoin(clients[i], { name: `P${i}` });
     }
     const now = 1_800_000_000_000;
-    vi.spyOn(Date, "now").mockReturnValue(now);
+    clock.setNow(now);
     (room as any).handleStartRound(clients[0], {});
-    vi.restoreAllMocks();
     expect(room.state.shiftEndsAt).toBe(now + 10 * 1000);
   });
 });

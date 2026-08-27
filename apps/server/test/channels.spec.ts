@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { PREP_TIME_MS, UNPREP_TIME_MS } from "@grandhotel/shared";
 import { getRoomRect, type RoomStateType } from "@grandhotel/shared";
 import { HotelRoom } from "../src/rooms/HotelRoom.js";
+import { VirtualClock } from "../src/time.js";
 import { canStartChannel, applyChannelCompletion } from "../src/channels.js";
 import type { ChannelType } from "@grandhotel/shared";
 
@@ -15,8 +16,13 @@ function mockClient(sessionId: string): any {
   return c;
 }
 
-async function createRoomWithPlayers(count: number): Promise<{ room: HotelRoom; clients: any[] }> {
-  const room = new HotelRoom();
+async function createRoomWithPlayers(count: number): Promise<{
+  room: HotelRoom;
+  clients: any[];
+  clock: VirtualClock;
+}> {
+  const clock = new VirtualClock();
+  const room = new HotelRoom(clock);
   await room.onCreate({});
   const clients: any[] = [];
   for (let i = 0; i < count; i++) {
@@ -24,7 +30,7 @@ async function createRoomWithPlayers(count: number): Promise<{ room: HotelRoom; 
     await room.onJoin(c, { name: `P${i}` });
     clients.push(c);
   }
-  return { room, clients };
+  return { room, clients, clock };
 }
 
 function startRoomWithSaboteur(room: HotelRoom, clients: any[], saboteurIndex: number): any {
@@ -51,13 +57,8 @@ function putPlayerOutside(room: HotelRoom, sessionId: string, roomId: string): v
 }
 
 describe("prep channel", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: false });
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.useRealTimers();
   });
 
   it("constants come from shared single source of truth", () => {
@@ -66,7 +67,7 @@ describe("prep channel", () => {
   });
 
   it("clean room stays clean at t+4999, becomes prepped at t+5000", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     startRoomWithSaboteur(room, clients, 0);
     const player = clients[1]; // staff
     const roomId = "1-0";
@@ -76,36 +77,36 @@ describe("prep channel", () => {
     (room as any).handleChannelStart(player, { type: "prep", roomId });
     expect(room.state.players.get(player.sessionId)!.activeChannel).toBe("prep");
 
-    await vi.advanceTimersByTimeAsync(PREP_TIME_MS - 1);
+    await clock.advance(PREP_TIME_MS - 1);
     expect(room.state.rooms.get(roomId)!.state).toBe("clean");
 
-    await vi.advanceTimersByTimeAsync(1);
+    await clock.advance(1);
     expect(room.state.rooms.get(roomId)!.state).toBe("prepped");
     expect(room.state.players.get(player.sessionId)!.activeChannel).toBeNull();
     expect((room as any).getActiveChannel(player.sessionId)).toBeNull();
   });
 
   it("moving out at t+2500 leaves room clean", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     startRoomWithSaboteur(room, clients, 0);
     const player = clients[1];
     const roomId = "1-2";
     putPlayerInside(room, player.sessionId, roomId);
 
     (room as any).handleChannelStart(player, { type: "prep", roomId });
-    await vi.advanceTimersByTimeAsync(2500);
+    await clock.advance(2500);
     putPlayerOutside(room, player.sessionId, roomId);
     (room as any).handleMove(player, { dx: -100, dy: 0, seq: 1 });
 
     expect(room.state.rooms.get(roomId)!.state).toBe("clean");
     expect(room.state.players.get(player.sessionId)!.activeChannel).toBeNull();
 
-    await vi.advanceTimersByTimeAsync(PREP_TIME_MS);
+    await clock.advance(PREP_TIME_MS);
     expect(room.state.rooms.get(roomId)!.state).toBe("clean");
   });
 
   it("prep in non-clean room is rejected with wrong-state", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     startRoomWithSaboteur(room, clients, 0);
     const player = clients[1];
     const roomId = "1-0";
@@ -120,7 +121,7 @@ describe("prep channel", () => {
   });
 
   it("second start while channeling is rejected with already-channeling", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     startRoomWithSaboteur(room, clients, 0);
     const player = clients[1];
     const roomId = "1-0";
@@ -136,17 +137,12 @@ describe("prep channel", () => {
 });
 
 describe("unprep and re-trash", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: false });
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.useRealTimers();
   });
 
   it("saboteur unpreps prepped→trashed after UNPREP_TIME_MS", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     const saboteur = startRoomWithSaboteur(room, clients, 1);
     const roomId = "2-3";
     room.state.rooms.get(roomId)!.state = "prepped";
@@ -155,16 +151,16 @@ describe("unprep and re-trash", () => {
     (room as any).handleChannelStart(saboteur, { type: "unprep", roomId });
     expect(room.state.players.get(saboteur.sessionId)!.activeChannel).toBe("unprep");
 
-    await vi.advanceTimersByTimeAsync(UNPREP_TIME_MS - 1);
+    await clock.advance(UNPREP_TIME_MS - 1);
     expect(room.state.rooms.get(roomId)!.state).toBe("prepped");
 
-    await vi.advanceTimersByTimeAsync(1);
+    await clock.advance(1);
     expect(room.state.rooms.get(roomId)!.state).toBe("trashed");
     expect(room.state.players.get(saboteur.sessionId)!.activeChannel).toBeNull();
   });
 
   it("staff unprep attempt rejected with not-saboteur", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     startRoomWithSaboteur(room, clients, 1);
     const staff = clients[0];
     const roomId = "2-3";
@@ -179,49 +175,44 @@ describe("unprep and re-trash", () => {
   });
 
   it("saboteur re-trashes trashed→trashed after another UNPREP_TIME_MS", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     const saboteur = startRoomWithSaboteur(room, clients, 2);
     const roomId = "3-1";
     room.state.rooms.get(roomId)!.state = "trashed";
     putPlayerInside(room, saboteur.sessionId, roomId);
 
     (room as any).handleChannelStart(saboteur, { type: "unprep", roomId });
-    await vi.advanceTimersByTimeAsync(UNPREP_TIME_MS);
+    await clock.advance(UNPREP_TIME_MS);
     expect(room.state.rooms.get(roomId)!.state).toBe("trashed");
   });
 
   it("early walk-out at 1500ms leaves room prepped", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     const saboteur = startRoomWithSaboteur(room, clients, 0);
     const roomId = "1-7";
     room.state.rooms.get(roomId)!.state = "prepped";
     putPlayerInside(room, saboteur.sessionId, roomId);
 
     (room as any).handleChannelStart(saboteur, { type: "unprep", roomId });
-    await vi.advanceTimersByTimeAsync(1500);
+    await clock.advance(1500);
     putPlayerOutside(room, saboteur.sessionId, roomId);
     (room as any).handleMove(saboteur, { dx: -10, dy: 0, seq: 1 });
 
     expect(room.state.rooms.get(roomId)!.state).toBe("prepped");
     expect(room.state.players.get(saboteur.sessionId)!.activeChannel).toBeNull();
 
-    await vi.advanceTimersByTimeAsync(UNPREP_TIME_MS);
+    await clock.advance(UNPREP_TIME_MS);
     expect(room.state.rooms.get(roomId)!.state).toBe("prepped");
   });
 });
 
 describe("fake prep identical", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: false });
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.useRealTimers();
   });
 
   it("saboteur fake-prep on clean room keeps room clean at and after PREP_TIME_MS", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     const saboteur = startRoomWithSaboteur(room, clients, 3);
     const roomId = "1-2";
     putPlayerInside(room, saboteur.sessionId, roomId);
@@ -229,16 +220,16 @@ describe("fake prep identical", () => {
     (room as any).handleChannelStart(saboteur, { type: "fake", roomId });
     expect(room.state.players.get(saboteur.sessionId)!.activeChannel).toBe("fake");
 
-    await vi.advanceTimersByTimeAsync(PREP_TIME_MS - 1);
+    await clock.advance(PREP_TIME_MS - 1);
     expect(room.state.rooms.get(roomId)!.state).toBe("clean");
 
-    await vi.advanceTimersByTimeAsync(1);
+    await clock.advance(1);
     expect(room.state.rooms.get(roomId)!.state).toBe("clean");
     expect(room.state.players.get(saboteur.sessionId)!.activeChannel).toBeNull();
   });
 
   it("staff fake-prep attempt rejected with not-saboteur", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     startRoomWithSaboteur(room, clients, 3);
     const staff = clients[0];
     const roomId = "1-2";
@@ -251,16 +242,15 @@ describe("fake prep identical", () => {
   });
 
   it("fake-prep duration equals real prep duration", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     const saboteur = startRoomWithSaboteur(room, clients, 0);
     const fakeRoom = "1-3";
     const realRoom = "1-4";
     putPlayerInside(room, saboteur.sessionId, fakeRoom);
 
-    vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    clock.setNow(1_000_000);
     (room as any).handleChannelStart(saboteur, { type: "fake", roomId: fakeRoom });
     const fakeChannel = (room as any).getActiveChannel(saboteur.sessionId);
-    vi.restoreAllMocks();
 
     expect(fakeChannel.type).toBe("fake");
     expect(fakeChannel.endsAt - fakeChannel.startedAt).toBe(PREP_TIME_MS);
@@ -269,13 +259,8 @@ describe("fake prep identical", () => {
 });
 
 describe("channel cancel cleanly", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: false });
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.useRealTimers();
   });
 
   const cases: Array<{ type: ChannelType; initialState: RoomStateType; saboteurOnly: boolean }> = [
@@ -286,7 +271,7 @@ describe("channel cancel cleanly", () => {
 
   for (const c of cases) {
     it(`${c.type}: explicit cancel leaves room state unchanged and clears active channel`, async () => {
-      const { room, clients } = await createRoomWithPlayers(4);
+      const { room, clients, clock } = await createRoomWithPlayers(4);
       const actorIndex = c.saboteurOnly ? 2 : 1;
       const actor = c.saboteurOnly
         ? startRoomWithSaboteur(room, clients, actorIndex)
@@ -306,7 +291,7 @@ describe("channel cancel cleanly", () => {
     });
 
     it(`${c.type}: walk-out cancels without state change`, async () => {
-      const { room, clients } = await createRoomWithPlayers(4);
+      const { room, clients, clock } = await createRoomWithPlayers(4);
       const actorIndex = c.saboteurOnly ? 2 : 1;
       const actor = c.saboteurOnly
         ? startRoomWithSaboteur(room, clients, actorIndex)
@@ -317,7 +302,7 @@ describe("channel cancel cleanly", () => {
       putPlayerInside(room, actor.sessionId, roomId);
 
       (room as any).handleChannelStart(actor, { type: c.type, roomId });
-      await vi.advanceTimersByTimeAsync(c.type === "unprep" ? 1500 : 2500);
+      await clock.advance(c.type === "unprep" ? 1500 : 2500);
 
       putPlayerOutside(room, actor.sessionId, roomId);
       (room as any).handleMove(actor, { dx: -10, dy: 0, seq: 1 });
@@ -328,7 +313,7 @@ describe("channel cancel cleanly", () => {
     });
 
     it(`${c.type}: floor change via elevator cancels without state change`, async () => {
-      const { room, clients } = await createRoomWithPlayers(4);
+      const { room, clients, clock } = await createRoomWithPlayers(4);
       const actorIndex = c.saboteurOnly ? 2 : 1;
       const actor = c.saboteurOnly
         ? startRoomWithSaboteur(room, clients, actorIndex)

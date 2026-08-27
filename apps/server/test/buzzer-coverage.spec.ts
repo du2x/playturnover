@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { COVERAGE_TARGET, ROOM_COUNT, SHIFT_LENGTH_S } from "@grandhotel/shared";
 import { HotelRoom } from "../src/rooms/HotelRoom.js";
+import { VirtualClock } from "../src/time.js";
 
 function mockClient(sessionId: string): any {
   const c: any = { sessionId, _sent: [] as Array<{ type: string; data: unknown }> };
@@ -11,8 +12,13 @@ function mockClient(sessionId: string): any {
   return c;
 }
 
-async function createRoomWithPlayers(count: number): Promise<{ room: HotelRoom; clients: any[] }> {
-  const room = new HotelRoom();
+async function createRoomWithPlayers(count: number): Promise<{
+  room: HotelRoom;
+  clients: any[];
+  clock: VirtualClock;
+}> {
+  const clock = new VirtualClock();
+  const room = new HotelRoom(clock);
   await room.onCreate({});
   const clients: any[] = [];
   for (let i = 0; i < count; i++) {
@@ -20,7 +26,7 @@ async function createRoomWithPlayers(count: number): Promise<{ room: HotelRoom; 
     await room.onJoin(c, { name: `P${i}` });
     clients.push(c);
   }
-  return { room, clients };
+  return { room, clients, clock };
 }
 
 function startRoom(room: HotelRoom, clients: any[], saboteurIndex = 0): void {
@@ -39,15 +45,6 @@ function setRoomsPrepped(room: HotelRoom, count: number): void {
 }
 
 describe("buzzer coverage win", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: false });
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
   it("uses SHIFT_LENGTH_S and ROOM_COUNT from shared constants", () => {
     expect(SHIFT_LENGTH_S).toBe(300);
     expect(ROOM_COUNT).toBe(24);
@@ -56,25 +53,24 @@ describe("buzzer coverage win", () => {
   });
 
   it("mid-shift winner stays null", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     startRoom(room, clients, 0);
 
     // fast-forward partway, but not to buzzer
-    await vi.advanceTimersByTimeAsync(1000 * 150);
+    await clock.advance(1000 * 150);
     expect(room.state.phase).toBe("playing");
     expect(room.state.winner).toBeNull();
   });
 
   it("staff wins when coverage >= COVERAGE_TARGET at buzzer", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     startRoom(room, clients, 0);
 
     setRoomsPrepped(room, 20);
 
-    const now = room.state.shiftEndsAt;
-    vi.spyOn(Date, "now").mockReturnValue(now);
-
-    await vi.advanceTimersByTimeAsync(1000);
+    // advance continuously to (and just past) the buzzer so the 1000ms
+    // interval fires with now >= shiftEndsAt
+    await clock.advance(room.state.shiftEndsAt - clock.now() + 1);
 
     expect(room.state.phase).toBe("results");
     expect(room.state.winner).toBe("staff");
@@ -84,15 +80,12 @@ describe("buzzer coverage win", () => {
   });
 
   it("saboteur wins when coverage < COVERAGE_TARGET at buzzer", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     startRoom(room, clients, 0);
 
     setRoomsPrepped(room, 12);
 
-    const now = room.state.shiftEndsAt;
-    vi.spyOn(Date, "now").mockReturnValue(now);
-
-    await vi.advanceTimersByTimeAsync(1000);
+    await clock.advance(room.state.shiftEndsAt - clock.now() + 1);
 
     expect(room.state.phase).toBe("results");
     expect(room.state.winner).toBe("saboteur");
@@ -102,20 +95,19 @@ describe("buzzer coverage win", () => {
   });
 
   it("timer interval respects shiftLengthSOverride", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({ shiftLengthSOverride: 5 });
     const clients = [mockClient("s0"), mockClient("s1"), mockClient("s2"), mockClient("s3")];
     for (let i = 0; i < clients.length; i++) await room.onJoin(clients[i], { name: `P${i}` });
 
     const now = 1_000_000_000;
-    vi.spyOn(Date, "now").mockReturnValue(now);
+    clock.setNow(now);
     startRoom(room, clients, 0);
     expect(room.state.shiftEndsAt).toBe(now + 5 * 1000);
 
     setRoomsPrepped(room, 20);
-    vi.spyOn(Date, "now").mockReturnValue(now + 5 * 1000);
-
-    await vi.advanceTimersByTimeAsync(1000);
+    await clock.advance(5 * 1000 + 1);
     expect(room.state.phase).toBe("results");
     expect(room.state.winner).toBe("staff");
   });

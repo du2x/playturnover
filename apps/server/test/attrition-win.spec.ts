@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { HotelRoom } from "../src/rooms/HotelRoom.js";
+import { VirtualClock } from "../src/time.js";
 
 function mockClient(sessionId: string): any {
   const c: any = { sessionId, _sent: [] as Array<{ type: string; data: unknown }> };
@@ -10,8 +11,13 @@ function mockClient(sessionId: string): any {
   return c;
 }
 
-async function createRoomWithPlayers(count: number): Promise<{ room: HotelRoom; clients: any[] }> {
-  const room = new HotelRoom();
+async function createRoomWithPlayers(count: number): Promise<{
+  room: HotelRoom;
+  clients: any[];
+  clock: VirtualClock;
+}> {
+  const clock = new VirtualClock();
+  const room = new HotelRoom(clock);
   await room.onCreate({});
   const clients: any[] = [];
   for (let i = 0; i < count; i++) {
@@ -19,7 +25,7 @@ async function createRoomWithPlayers(count: number): Promise<{ room: HotelRoom; 
     await room.onJoin(c, { name: `P${i}` });
     clients.push(c);
   }
-  return { room, clients };
+  return { room, clients, clock };
 }
 
 function startRoom(room: HotelRoom, clients: any[], saboteurIndex = 0): void {
@@ -29,15 +35,6 @@ function startRoom(room: HotelRoom, clients: any[], saboteurIndex = 0): void {
 }
 
 describe("attrition win", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: false });
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
   it("4-player round, disconnect two staff so 1 staff remains -> saboteur attrition win", async () => {
     const { room, clients } = await createRoomWithPlayers(4);
     // saboteur at index 1 => staff are s0, s2, s3
@@ -73,12 +70,11 @@ describe("attrition win", () => {
   });
 
   it("attrition overrides the timer and fires before buzzer", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     startRoom(room, clients, 0); // saboteur s0, staff s1, s2, s3
 
-    const now = Date.now();
     // buzzer would be at now + 300s; we disconnect two staff long before that
-    vi.spyOn(Date, "now").mockReturnValue(now + 5_000);
+    clock.setNow(clock.now() + 5_000);
 
     await room.onLeave(clients[2]);
     expect(room.state.phase).toBe("playing");

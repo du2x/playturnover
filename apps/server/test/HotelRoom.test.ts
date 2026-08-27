@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   COVERAGE_TARGET,
   HALLWAY_MAX_X,
@@ -8,6 +8,7 @@ import {
   SERVER_MAX_SPEED_PX_S,
 } from "@grandhotel/shared";
 import { HotelRoom, computeClampedX } from "../src/rooms/HotelRoom.js";
+import { VirtualClock } from "../src/time.js";
 
 function mockClient(sessionId: string): any {
   const c: any = { sessionId, _sent: [] as Array<{ type: string; data: unknown }> };
@@ -23,14 +24,16 @@ function mockClient(sessionId: string): any {
 
 describe("HotelRoom — roster & cap (V-4)", () => {
   it("sets maxClients to MAX_PLAYERS via shared constant", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
     expect(room.maxClients).toBe(MAX_PLAYERS);
     expect(MAX_PLAYERS).toBe(6);
   });
 
   it("six joins succeed, seventh rejected, roster stays 6", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
 
     for (let i = 0; i < MAX_PLAYERS; i++) {
@@ -55,7 +58,8 @@ describe("HotelRoom — roster & cap (V-4)", () => {
   });
 
   it("validates display name: trimmed non-empty ≤24 chars, bad-name rejected", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
 
     const c1 = mockClient("a1");
@@ -74,7 +78,8 @@ describe("HotelRoom — roster & cap (V-4)", () => {
   });
 
   it("assigns colorIndex by seat and midpoint x, first joiner becomes host", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
     const host = mockClient("host");
     const other = mockClient("other");
@@ -91,7 +96,8 @@ describe("HotelRoom — roster & cap (V-4)", () => {
   });
 
   it("host leave reassigns to earliest remaining", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
     const c0 = mockClient("s0");
     const c1 = mockClient("s1");
@@ -110,15 +116,6 @@ describe("HotelRoom — roster & cap (V-4)", () => {
 });
 
 describe("HotelRoom — lifecycle phases (V-7)", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: false });
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
   async function joinFour(room: HotelRoom): Promise<any[]> {
     const clients = ["host", "p1", "p2", "p3"].map((sid) => mockClient(sid));
     for (let i = 0; i < clients.length; i++) await room.onJoin(clients[i], { name: `P${i}` });
@@ -126,7 +123,8 @@ describe("HotelRoom — lifecycle phases (V-7)", () => {
   }
 
   it("host startRound with >=4 players: waiting -> playing with roles + shift deadline; resultsPayload stays null", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
     const clients = await joinFour(room);
 
@@ -158,7 +156,8 @@ describe("HotelRoom — lifecycle phases (V-7)", () => {
   });
 
   it("non-host startRound refused from waiting", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
     const clients = await joinFour(room);
 
@@ -169,7 +168,8 @@ describe("HotelRoom — lifecycle phases (V-7)", () => {
   });
 
   it("buzzer: playing -> results carries winner + traitorReveal; resultsPayload stays null; further startRound refused", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
     const clients = await joinFour(room);
 
@@ -183,8 +183,9 @@ describe("HotelRoom — lifecycle phases (V-7)", () => {
       left--;
     }
 
-    vi.spyOn(Date, "now").mockReturnValue(room.state.shiftEndsAt);
-    await vi.advanceTimersByTimeAsync(1000);
+    // advance continuously to (and just past) the buzzer so the 1000ms
+    // interval fires with now >= shiftEndsAt
+    await clock.advance(room.state.shiftEndsAt - clock.now() + 1);
 
     expect(room.state.phase).toBe("results");
     expect(room.state.winner).toBe("staff");
@@ -227,18 +228,17 @@ describe("HotelRoom — movement clamp unit (V-5 / V-6 server half)", () => {
   });
 
   it("ignores dy and rides schema: handler writes to state.players[sessionId].x", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
     const c = mockClient("mover");
     await room.onJoin(c, { name: "Mover" });
     const startX = room.state.players.get("mover")!.x;
 
     // control time: set lastMoveAt to 100ms ago then send move
-    const now = Date.now();
+    const now = clock.now() + 100;
+    clock.setNow(now);
     (room as any).lastMoveAt.set("mover", now - 100);
-    const realNow = Date.now;
-    // stub Date.now to return now
-    vi.spyOn(Date, "now").mockReturnValue(now);
 
     (room as any).handleMove(c, { dx: 10, dy: 999, seq: 1 });
     // dy ignored, dx 10 within 33 limit, so moved
@@ -248,7 +248,7 @@ describe("HotelRoom — movement clamp unit (V-5 / V-6 server half)", () => {
     const before = room.state.players.get("mover")!.x;
     // set last to now again, then advance 100ms
     (room as any).lastMoveAt.set("mover", now);
-    vi.spyOn(Date, "now").mockReturnValue(now + 100);
+    clock.setNow(now + 100);
     (room as any).handleMove(c, { dx: 1000, dy: 0, seq: 2 });
     const maxDelta = SERVER_MAX_SPEED_PX_S * 0.1;
     expect(room.state.players.get("mover")!.x).toBe(before + maxDelta);
@@ -256,25 +256,22 @@ describe("HotelRoom — movement clamp unit (V-5 / V-6 server half)", () => {
     // invalid MoveMsg ignored (no crash, no move)
     const stable = room.state.players.get("mover")!.x;
     (room as any).lastMoveAt.set("mover", now + 100);
-    vi.spyOn(Date, "now").mockReturnValue(now + 200);
+    clock.setNow(now + 200);
     (room as any).handleMove(c, { dx: "bad" as unknown as number, dy: 0, seq: 3 });
     expect(room.state.players.get("mover")!.x).toBe(stable);
-
-    vi.restoreAllMocks();
-    // restore Date.now
-    (Date.now as any) = realNow;
   });
 
   it("movement uses per-player lastMoveAt isolation", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
     const a = mockClient("a");
     const b = mockClient("b");
     await room.onJoin(a, { name: "A" });
     await room.onJoin(b, { name: "B" });
 
-    const now = Date.now();
-    vi.spyOn(Date, "now").mockReturnValue(now);
+    const now = clock.now() + 100;
+    clock.setNow(now);
     (room as any).lastMoveAt.set("a", now - 100);
     (room as any).lastMoveAt.set("b", now - 100);
 
@@ -285,7 +282,5 @@ describe("HotelRoom — movement clamp unit (V-5 / V-6 server half)", () => {
     expect(bxBefore).toBe((HALLWAY_MIN_X + HALLWAY_MAX_X) / 2);
     // a moved
     expect(ax).not.toBe(bxBefore);
-
-    vi.restoreAllMocks();
   });
 });

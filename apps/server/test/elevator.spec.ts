@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   ELEVATOR_ARRIVE_MS,
   ELEVATOR_CAPACITY,
@@ -9,6 +9,7 @@ import {
 } from "@grandhotel/shared";
 import type { ElevatorShaft } from "@grandhotel/shared";
 import { HotelRoom } from "../src/rooms/HotelRoom.js";
+import { VirtualClock } from "../src/time.js";
 import {
   callElevator,
   completeRide,
@@ -32,8 +33,13 @@ function mockClient(sessionId: string): any {
   };
 }
 
-async function createRoomWithHostAndPlayers(count: number): Promise<{ room: HotelRoom; clients: any[] }> {
-  const room = new HotelRoom();
+async function createRoomWithHostAndPlayers(count: number): Promise<{
+  room: HotelRoom;
+  clients: any[];
+  clock: VirtualClock;
+}> {
+  const clock = new VirtualClock();
+  const room = new HotelRoom(clock);
   await room.onCreate({});
   const clients: any[] = [];
   for (let i = 0; i < count; i++) {
@@ -41,7 +47,7 @@ async function createRoomWithHostAndPlayers(count: number): Promise<{ room: Hote
     await room.onJoin(c, { name: `P${i}` });
     clients.push(c);
   }
-  return { room, clients };
+  return { room, clients, clock };
 }
 
 async function startRoomForElevator(room: HotelRoom, host: any): Promise<void> {
@@ -50,15 +56,6 @@ async function startRoomForElevator(room: HotelRoom, host: any): Promise<void> {
 }
 
 describe("elevator deterministic", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: false });
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
   it("constants match shared single source of truth", () => {
     expect(ELEVATOR_ARRIVE_MS).toBe(3000);
     expect(ELEVATOR_RIDE_MS).toBe(2000);
@@ -177,7 +174,7 @@ describe("elevator deterministic", () => {
   });
 
   it("HotelRoom: call on floor 0, car unavailable at t+2999, available at t+3000", async () => {
-    const { room, clients } = await createRoomWithHostAndPlayers(4);
+    const { room, clients, clock } = await createRoomWithHostAndPlayers(4);
     await startRoomForElevator(room, clients[0]);
     const host = clients[0];
     // position host at elevator A
@@ -188,26 +185,26 @@ describe("elevator deterministic", () => {
     const car = room.state.elevators.get("A")!;
     expect(car.state).toBe("arriving");
 
-    await vi.advanceTimersByTimeAsync(2999);
+    await clock.advance(2999);
     expect(car.state).toBe("arriving");
 
-    await vi.advanceTimersByTimeAsync(1);
+    await clock.advance(1);
     expect(car.state).toBe("boarding");
   });
 
   it("HotelRoom: ride 2000ms teleports rider to destination floor", async () => {
-    const { room, clients } = await createRoomWithHostAndPlayers(4);
+    const { room, clients, clock } = await createRoomWithHostAndPlayers(4);
     await startRoomForElevator(room, clients[0]);
     const host = clients[0];
     room.state.players.get("p0")!.x = ELEVATOR_A_X;
     room.state.players.get("p0")!.floor = 0;
 
     (room as any).handleCallElevator(host, { shaft: "A" });
-    await vi.advanceTimersByTimeAsync(3000);
+    await clock.advance(3000);
     expect(room.state.elevators.get("A")!.state).toBe("boarding");
 
     (room as any).handleRideElevator(host, { shaft: "A", destFloor: 2 });
-    await vi.advanceTimersByTimeAsync(2000);
+    await clock.advance(2000);
 
     const p = room.state.players.get("p0")!;
     expect(p.floor).toBe(2);
@@ -216,7 +213,7 @@ describe("elevator deterministic", () => {
   });
 
   it("HotelRoom: third concurrent rider is queued and rides next cycle", async () => {
-    const { room, clients } = await createRoomWithHostAndPlayers(4);
+    const { room, clients, clock } = await createRoomWithHostAndPlayers(4);
     await startRoomForElevator(room, clients[0]);
     const [c0, c1, c2] = clients;
     room.state.players.get("p0")!.x = ELEVATOR_A_X;
@@ -227,7 +224,7 @@ describe("elevator deterministic", () => {
     room.state.players.get("p2")!.floor = 0;
 
     (room as any).handleCallElevator(c0, { shaft: "A" });
-    await vi.advanceTimersByTimeAsync(3000);
+    await clock.advance(3000);
 
     (room as any).handleRideElevator(c0, { shaft: "A", destFloor: 2 });
     (room as any).handleRideElevator(c1, { shaft: "A", destFloor: 2 });
@@ -236,22 +233,22 @@ describe("elevator deterministic", () => {
     const car = room.state.elevators.get("A")!;
     expect([...car.queue]).toEqual(["p2"]);
 
-    await vi.advanceTimersByTimeAsync(2000);
+    await clock.advance(2000);
     expect(room.state.players.get("p0")!.floor).toBe(2);
     expect(room.state.players.get("p1")!.floor).toBe(2);
     expect(room.state.players.get("p2")!.floor).toBe(0);
     expect(car.state).toBe("arriving");
 
-    await vi.advanceTimersByTimeAsync(3000);
+    await clock.advance(3000);
     expect(car.state).toBe("boarding");
 
     (room as any).handleRideElevator(c2, { shaft: "A", destFloor: 2 });
-    await vi.advanceTimersByTimeAsync(2000);
+    await clock.advance(2000);
     expect(room.state.players.get("p2")!.floor).toBe(2);
   });
 
   it("HotelRoom: spoof floor change via move is ignored", async () => {
-    const { room, clients } = await createRoomWithHostAndPlayers(4);
+    const { room, clients, clock } = await createRoomWithHostAndPlayers(4);
     await startRoomForElevator(room, clients[0]);
     const host = clients[0];
     room.state.players.get("p0")!.x = ELEVATOR_A_X;
@@ -262,16 +259,16 @@ describe("elevator deterministic", () => {
   });
 
   it("HotelRoom: elevator B uses ELEVATOR_B_X", async () => {
-    const { room, clients } = await createRoomWithHostAndPlayers(4);
+    const { room, clients, clock } = await createRoomWithHostAndPlayers(4);
     await startRoomForElevator(room, clients[0]);
     const host = clients[0];
     room.state.players.get("p0")!.x = ELEVATOR_B_X;
     room.state.players.get("p0")!.floor = 0;
 
     (room as any).handleCallElevator(host, { shaft: "B" });
-    await vi.advanceTimersByTimeAsync(3000);
+    await clock.advance(3000);
     (room as any).handleRideElevator(host, { shaft: "B", destFloor: 1 });
-    await vi.advanceTimersByTimeAsync(2000);
+    await clock.advance(2000);
 
     expect(room.state.players.get("p0")!.floor).toBe(1);
     expect(room.state.players.get("p0")!.x).toBe(ELEVATOR_B_X);

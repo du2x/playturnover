@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { HotelRoom } from "../src/rooms/HotelRoom.js";
+import { VirtualClock } from "../src/time.js";
 
 function mockClient(sessionId: string): any {
   const c: any = { sessionId, _sent: [] as Array<{ type: string; data: unknown }> };
@@ -30,7 +31,8 @@ describe("role assignment", () => {
       };
       const stub = vi.spyOn(Math, "random").mockImplementation(rng);
 
-      const room = new HotelRoom();
+      const clock = new VirtualClock();
+      const room = new HotelRoom(clock);
       await room.onCreate({});
       const clients = [mockClient("a"), mockClient("b"), mockClient("c"), mockClient("d")];
       for (let i = 0; i < clients.length; i++) {
@@ -72,7 +74,8 @@ describe("role assignment", () => {
   });
 
   it("each client receives only its own role, no other roles visible", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
     const clients = [mockClient("s0"), mockClient("s1"), mockClient("s2"), mockClient("s3")];
     for (let i = 0; i < 4; i++) await room.onJoin(clients[i], { name: `P${i}` });
@@ -96,7 +99,8 @@ describe("role assignment", () => {
   });
 
   it("movement keeps clamp via computeClampedX and floor unchanged after start", async () => {
-    const room = new HotelRoom();
+    const clock = new VirtualClock();
+    const room = new HotelRoom(clock);
     await room.onCreate({});
     const clients = [mockClient("s0"), mockClient("s1"), mockClient("s2"), mockClient("s3")];
     for (let i = 0; i < 4; i++) await room.onJoin(clients[i], { name: `P${i}` });
@@ -106,11 +110,10 @@ describe("role assignment", () => {
     expect(p.floor).toBe(0);
     const startX = p.x;
     // simulate move with large dx, ensure clamp
-    const now = Date.now();
-    vi.spyOn(Date, "now").mockReturnValue(now);
+    const now = clock.now() + 100;
+    clock.setNow(now);
     (room as any).lastMoveAt.set("s0", now - 100);
     (room as any).handleMove(clients[0], { dx: 1000, dy: 0, seq: 1 });
-    vi.restoreAllMocks();
     // dx clamped to SERVER_MAX_SPEED_PX_S*0.1 =33, so newX = startX+33 clamped to bounds
     expect(p.x).not.toBe(startX);
     expect(p.floor).toBe(0); // floor unchanged

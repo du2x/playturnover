@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { HALLWAY_MIN_X, HALLWAY_MAX_X, SERVER_MAX_SPEED_PX_S } from "@grandhotel/shared";
 import { getRoomRect } from "@grandhotel/shared";
 import { HotelRoom } from "../src/rooms/HotelRoom.js";
+import { VirtualClock } from "../src/time.js";
 
 function mockClient(sessionId: string): any {
   const c: any = { sessionId, _sent: [] as Array<{ type: string; data: unknown }> };
@@ -12,8 +13,13 @@ function mockClient(sessionId: string): any {
   return c;
 }
 
-async function createRoomWithPlayers(count: number): Promise<{ room: HotelRoom; clients: any[] }> {
-  const room = new HotelRoom();
+async function createRoomWithPlayers(count: number): Promise<{
+  room: HotelRoom;
+  clients: any[];
+  clock: VirtualClock;
+}> {
+  const clock = new VirtualClock();
+  const room = new HotelRoom(clock);
   await room.onCreate({});
   const clients: any[] = [];
   for (let i = 0; i < count; i++) {
@@ -21,7 +27,7 @@ async function createRoomWithPlayers(count: number): Promise<{ room: HotelRoom; 
     await room.onJoin(c, { name: `P${i}` });
     clients.push(c);
   }
-  return { room, clients };
+  return { room, clients, clock };
 }
 
 function startRoom(room: HotelRoom, clients: any[], saboteurIndex = 0): void {
@@ -38,13 +44,8 @@ function putPlayerInside(room: HotelRoom, sessionId: string, roomId: string): vo
 }
 
 describe("authority", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: false });
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.useRealTimers();
   });
 
   it("spoofed client messages cannot set roles", async () => {
@@ -96,12 +97,12 @@ describe("authority", () => {
   });
 
   it("movement clamp rejects oversized dx beyond SERVER_MAX_SPEED_PX_S * dt", async () => {
-    const { room, clients } = await createRoomWithPlayers(4);
+    const { room, clients, clock } = await createRoomWithPlayers(4);
     startRoom(room, clients, 0);
     const p = room.state.players.get(clients[0].sessionId)!;
 
-    const now = Date.now();
-    vi.spyOn(Date, "now").mockReturnValue(now);
+    const now = clock.now() + 100;
+    clock.setNow(now);
     (room as any).lastMoveAt.set(clients[0].sessionId, now - 100);
 
     p.x = HALLWAY_MIN_X + 100;
