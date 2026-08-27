@@ -41,12 +41,12 @@ COPY --from=builder /app/packages/shared/node_modules ./packages/shared/node_mod
 COPY --from=builder /app/apps/server/node_modules ./apps/server/node_modules
 
 # Ensure CMD path exists: tsc with rootDir "." emits to dist/src/, but spec
-# expects apps/server/dist/index.js. Create a compatibility copy/symlink.
+# expects apps/server/dist/index.js. Flatten every dist/src module (index,
+# colyseus-compat, static, elevator, channels, topology) plus dist/src/rooms
+# so relative imports (../elevator.js etc.) resolve at the top level.
 RUN if [ ! -f apps/server/dist/index.js ] && [ -f apps/server/dist/src/index.js ]; then \
-      cp apps/server/dist/src/index.js apps/server/dist/index.js && \
-      cp apps/server/dist/src/index.js.map apps/server/dist/index.js.map 2>/dev/null || true && \
-      cp apps/server/dist/src/colyseus-compat.js apps/server/dist/colyseus-compat.js 2>/dev/null || true && \
-      cp apps/server/dist/src/static.js apps/server/dist/static.js 2>/dev/null || true && \
+      cp apps/server/dist/src/*.js apps/server/dist/ && \
+      cp apps/server/dist/src/*.js.map apps/server/dist/ 2>/dev/null || true && \
       mkdir -p apps/server/dist/rooms && cp -r apps/server/dist/src/rooms/* apps/server/dist/rooms/ 2>/dev/null || true; \
     fi
 
