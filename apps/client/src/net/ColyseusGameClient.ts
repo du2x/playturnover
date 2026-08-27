@@ -179,12 +179,12 @@ export class ColyseusGameClient implements GameClient {
   private stateCbs = new Set<(s: RoomStateView) => void>();
   private eventCbs = new Set<(e: ClientEvent) => void>();
   private lastView: RoomStateView | null = null;
-  private myRole: RoleType | null = null;
+  private privateRole: RoleType | null = null;
 
   private emitState(): void {
     if (!this.room) return;
     const rawState = (this.room as unknown as { state: unknown }).state;
-    const view = toView(rawState, this.room.sessionId, this.myRole);
+    const view = toView(rawState, this.room.sessionId, this.privateRole);
     if (!view) return;
     this.lastView = view;
     for (const cb of this.stateCbs) cb(view);
@@ -222,7 +222,7 @@ export class ColyseusGameClient implements GameClient {
     (room.onMessage as unknown as (type: string, cb: (payload: unknown) => void) => void)("role", (payload: unknown) => {
       const p = payload as { role?: string };
       if (p.role === "staff" || p.role === "saboteur") {
-        this.myRole = p.role as RoleType;
+        this.privateRole = p.role as RoleType;
         this.emitState();
       }
     });
@@ -267,7 +267,7 @@ export class ColyseusGameClient implements GameClient {
       const room = await this.client.joinOrCreate<unknown>("hotel", { name: this.pendingName });
       this.wireRoom(room);
       // ensure initial emission after wire (state may arrive async, but also try now)
-      const view = toView((room as unknown as { state: unknown }).state, room.sessionId, this.myRole);
+      const view = toView((room as unknown as { state: unknown }).state, room.sessionId, this.privateRole);
       if (view) {
         this.lastView = view;
         for (const cb of this.stateCbs) cb(view);
@@ -288,7 +288,7 @@ export class ColyseusGameClient implements GameClient {
     try {
       const room = await this.client.joinById<unknown>(filtered, { name: this.pendingName });
       this.wireRoom(room);
-      const view = toView((room as unknown as { state: unknown }).state, room.sessionId, this.myRole);
+      const view = toView((room as unknown as { state: unknown }).state, room.sessionId, this.privateRole);
       if (view) {
         this.lastView = view;
         for (const cb of this.stateCbs) cb(view);
@@ -355,7 +355,7 @@ export class ColyseusGameClient implements GameClient {
   }
 
   getCachedRole(): RoleType | null {
-    return this.myRole;
+    return this.privateRole;
   }
 
   onEvent(cb: (e: ClientEvent) => void): Unsubscribe {

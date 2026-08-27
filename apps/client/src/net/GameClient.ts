@@ -5,13 +5,25 @@ export type SessionId = string;
 export type DisplayName = string;
 export type RoomCode = string;
 
-export type Phase = "waiting" | "playing" | "results";
+// Unions are single-sourced in @grandhotel/shared; re-exported here for the
+// transport surface (ColyseusGameClient imports them from this module).
+import type {
+  ChannelType,
+  ElevatorShaft,
+  ElevatorStatus,
+  Phase,
+  RoleType,
+  RoomStateType,
+} from "@grandhotel/shared";
 
-export type RoleType = "staff" | "saboteur";
-export type RoomStateType = "clean" | "prepped" | "trashed";
-export type ElevatorStatus = "idle" | "arriving" | "boarding";
-export type ElevatorShaft = "A" | "B";
-export type ChannelType = "prep" | "unprep" | "fake";
+export type {
+  ChannelType,
+  ElevatorShaft,
+  ElevatorStatus,
+  Phase,
+  RoleType,
+  RoomStateType,
+} from "@grandhotel/shared";
 
 export interface RoomStateView {
   players: Array<{
