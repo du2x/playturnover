@@ -76,6 +76,7 @@ function toView(
     traitorReveal?: unknown | null;
     coveragePercent?: unknown;
     recapEvents?: unknown;
+    roomCode?: unknown;
   };
 
   const players: RoomStateView["players"] = [];
@@ -136,9 +137,12 @@ function toView(
   const winner = normalizeWinner(s.winner);
   const traitorReveal = normalizeTraitorReveal(s.traitorReveal);
   const recapEvents = readRecapEvents(s.recapEvents);
+  const roomCode =
+    typeof s.roomCode === "string" && s.roomCode !== "" ? s.roomCode : null;
 
   return {
     players,
+    roomCode,
     phase,
     mySessionId,
     hostSessionId,
@@ -284,6 +288,13 @@ function normalizeTraitorReveal(
     return { sessionId: v.sessionId, name: v.name };
   }
   return null;
+}
+
+const ROOM_CODE_POLL_INTERVAL_MS = 50;
+const ROOM_CODE_POLL_TIMEOUT_MS = 2000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function mapServerError(reasonOrMessage: string): ClientEvent {
@@ -468,7 +479,15 @@ export class ColyseusGameClient implements GameClient {
         (room as unknown as { roomId: string; id: string }).roomId ??
         (room as unknown as { id: string }).id ??
         "";
-      return rid;
+      // Return the server-assigned short code, not the raw room id: poll the
+      // projected view until state sync carries `roomCode` (~2s window).
+      let shortCode = this.lastView?.roomCode ?? null;
+      const deadline = Date.now() + ROOM_CODE_POLL_TIMEOUT_MS;
+      while (!shortCode && Date.now() < deadline) {
+        await sleep(ROOM_CODE_POLL_INTERVAL_MS);
+        shortCode = this.lastView?.roomCode ?? null;
+      }
+      return shortCode ?? rid;
     } catch (err) {
       const ev = classifyJoinError(err);
       this.emitEvent(ev);
@@ -481,8 +500,28 @@ export class ColyseusGameClient implements GameClient {
       throw new Error("not-connected: call connect() first");
     const filtered = code.trim().toUpperCase();
     if (!this.client) this.client = new Client(getEndpoint());
+    // Resolve the short code against room listings (metadata.roomCode is
+    // published by the server) — the display code is never a joinable id.
+    let match: { roomId: string } | undefined;
     try {
-      const room = await this.client.joinById<unknown>(filtered, {
+      const listings = await this.client.getAvailableRooms<{
+        roomCode?: string;
+      }>("hotel");
+      match = listings.find((l) => l.metadata?.roomCode === filtered);
+    } catch (err) {
+      const ev = classifyJoinError(err);
+      this.emitEvent(ev);
+      throw err;
+    }
+    if (!match) {
+      // Classified rejection BEFORE any join attempt — never an unhandled
+      // MatchMakeError from joining a code as if it were a room id.
+      const ev: ClientEvent = { type: "rejected", reason: "not-found" };
+      this.emitEvent(ev);
+      throw new Error("not-found");
+    }
+    try {
+      const room = await this.client.joinById<unknown>(match.roomId, {
         name: this.pendingName,
       });
       this.wireRoom(room);

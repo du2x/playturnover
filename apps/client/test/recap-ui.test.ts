@@ -11,6 +11,7 @@ function makeResultsView(overrides?: Partial<RoomStateView>): RoomStateView {
       { id: "p3", name: "Eve", colorIndex: 2, x: 300, floor: 2, fired: true, spectator: true },
     ],
     phase: "results",
+    roomCode: null,
     mySessionId: "p1",
     hostSessionId: "p1",
     myRole: "staff",

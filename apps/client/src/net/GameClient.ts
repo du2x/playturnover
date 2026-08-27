@@ -37,6 +37,8 @@ export interface RoomStateView {
     fired: boolean;
     spectator: boolean;
   }>;
+  /** Server-assigned joinable short code (empty string decodes to null until synced). */
+  roomCode: string | null;
   phase: Phase;
   mySessionId: SessionId;
   hostSessionId: SessionId;

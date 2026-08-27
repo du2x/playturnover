@@ -27,6 +27,7 @@ function makePlayingView(overrides?: Partial<RoomStateView>): RoomStateView {
       },
     ],
     phase: "playing",
+    roomCode: null,
     mySessionId: "p1",
     hostSessionId: "p1",
     myRole: "staff",

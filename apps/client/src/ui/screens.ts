@@ -242,7 +242,7 @@ export function renderHudBar(
     PHASE_LABELS[view?.phase ?? "waiting"] ?? "…";
   const floor = view?.myFloor ?? 0;
   floorChip.textContent = `Floor: ${floor === 0 ? "LOBBY" : `${floor}F`}`;
-  codeChip.textContent = `Code: ${state.code}`;
+  codeChip.textContent = `Code: ${view?.roomCode ?? state.code}`;
   codeChip.classList.add("code-mono");
   elevatorsChip.textContent = elevatorsText(view);
 }

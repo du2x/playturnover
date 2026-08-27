@@ -11,8 +11,16 @@ vi.mock("colyseus.js", () => ({
 import { ColyseusGameClient } from "../../src/net/ColyseusGameClient.js";
 
 // Stub a minimal Room/Client for unit tests without Touching colyseus.js internals.
-function makeFakeRoom(sessionId: string) {
-  const state: Record<string, unknown> = {};
+function makeFakeRoom(
+  sessionId: string,
+  initialState: Record<string, unknown> = {},
+) {
+  const state: Record<string, unknown> = {
+    // Pre-assigned short code so createRoom() returns immediately without
+    // waiting on its ~2s poll window. Override per-test via initialState.
+    roomCode: "QZ7K",
+    ...initialState,
+  };
   const stateCbs = new Set<(state: unknown) => void>();
   const msgCbs = new Map<string, Array<(payload: unknown) => void>>();
   const errorCbs = new Set<(code: number, message?: string) => void>();
@@ -54,10 +62,14 @@ function makeFakeRoom(sessionId: string) {
   return room;
 }
 
-function makeFakeClient(room: ReturnType<typeof makeFakeRoom>) {
+function makeFakeClient(
+  room: ReturnType<typeof makeFakeRoom>,
+  listings: Array<{ roomId: string; metadata?: { roomCode?: string } }> = [],
+) {
   return {
     joinOrCreate: vi.fn().mockResolvedValue(room),
     joinById: vi.fn().mockResolvedValue(room),
+    getAvailableRooms: vi.fn().mockResolvedValue(listings),
   };
 }
 
@@ -302,5 +314,122 @@ describe("ColyseusGameClient", () => {
       { type: "rejected", reason: "wrong-state" },
       { type: "error", message: "unknown-problem", reason: "unknown-problem" },
     ]);
+  });
+});
+
+describe("code display (V-3)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("window", { location: { origin: "http://localhost:2567" } });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("createRoom returns the projected short code, never the raw roomId", async () => {
+    const room = makeFakeRoom("sess-v3a");
+    const fake = makeFakeClient(room);
+    const client = new ColyseusGameClient();
+    // @ts-expect-error private field injection for test
+    client.client = fake;
+    await client.connect("Vee");
+
+    const code = await client.createRoom();
+
+    expect(code).toBe("QZ7K");
+    expect(code).not.toBe("ROOM42");
+  });
+
+  it("toView maps an empty raw roomCode to null until synced", async () => {
+    vi.useFakeTimers();
+    const room = makeFakeRoom("sess-v3b", { roomCode: "" });
+    const fake = makeFakeClient(room);
+    const client = new ColyseusGameClient();
+    // @ts-expect-error private field injection for test
+    client.client = fake;
+    await client.connect("Wes");
+
+    const pending = client.createRoom();
+    await vi.runAllTimersAsync().then(() => pending);
+    const view = client.getLastView();
+
+    expect(view?.roomCode).toBeNull();
+
+    // Once the server syncs the short code, the projection carries it.
+    room._setState({ roomCode: "AB2C" });
+    expect(client.getLastView()?.roomCode).toBe("AB2C");
+  });
+
+  it("falls back to the raw roomId when no code syncs within the poll window", async () => {
+    vi.useFakeTimers();
+    const room = makeFakeRoom("sess-v3c", { roomCode: "" });
+    const fake = makeFakeClient(room);
+    const client = new ColyseusGameClient();
+    // @ts-expect-error private field injection for test
+    client.client = fake;
+    await client.connect("Xiu");
+
+    const pending = client.createRoom();
+    const code = await vi.runAllTimersAsync().then(() => pending);
+
+    expect(code).toBe("ROOM42");
+  });
+});
+
+describe("room code (V-2 client half)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("window", { location: { origin: "http://localhost:2567" } });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("resolves a well-formed displayed code through listings and joins by the resolved room id", async () => {
+    const room = makeFakeRoom("sess-joiner", { roomCode: "WXYZ" });
+    const fake = makeFakeClient(room, [
+      { roomId: "ROOM42", metadata: { roomCode: "WXYZ" } },
+      { roomId: "OTHER1", metadata: { roomCode: "AAAA" } },
+    ]);
+    const client = new ColyseusGameClient();
+    // @ts-expect-error private field injection for test
+    client.client = fake;
+    await client.connect("Yuri");
+
+    const events: Array<{ type: string; reason?: string }> = [];
+    client.onEvent((ev) => events.push(ev));
+
+    // lowercase input must be normalized before matching listings
+    await expect(client.joinByCode("wxyz")).resolves.toBeUndefined();
+
+    expect(fake.getAvailableRooms).toHaveBeenCalledWith("hotel");
+    expect(fake.joinById).toHaveBeenCalledWith("ROOM42", { name: "Yuri" });
+    expect(fake.joinById).not.toHaveBeenCalledWith(
+      "wxyz",
+      expect.anything(),
+    );
+    expect(fake.joinById).not.toHaveBeenCalledWith(
+      "WXYZ",
+      expect.anything(),
+    );
+    expect(events).toEqual([]);
+  });
+
+  it("rejects a well-formed but nonexistent code with a classified not-found event before any join attempt", async () => {
+    const room = makeFakeRoom("sess-watcher", { roomCode: "AAAA" });
+    const fake = makeFakeClient(room, [
+      { roomId: "OTHER1", metadata: { roomCode: "AAAA" } },
+    ]);
+    const client = new ColyseusGameClient();
+    // @ts-expect-error private field injection for test
+    client.client = fake;
+    await client.connect("Zoe");
+
+    const events: Array<{ type: string; reason?: string }> = [];
+    client.onEvent((ev) => events.push(ev));
+
+    await expect(client.joinByCode("ZZZZ")).rejects.toThrow("not-found");
+
+    expect(fake.joinById).not.toHaveBeenCalled();
+    expect(events).toContainEqual({ type: "rejected", reason: "not-found" });
   });
 });

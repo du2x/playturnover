@@ -18,6 +18,7 @@ function makeView(overrides?: Partial<RoomStateView>): RoomStateView {
       },
     ],
     phase: "waiting",
+    roomCode: null,
     mySessionId: "a1",
     hostSessionId: "a1",
     myRole: null,
