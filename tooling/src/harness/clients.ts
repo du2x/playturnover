@@ -689,6 +689,39 @@ export async function waitForRecapEvents(
   );
 }
 
+// ── M4 join-code helpers ─────────────────────────────────────────────────────
+
+/** Reads the replicated server-assigned short room code, or null when not synced yet. */
+export function getRoomCode(c: HarnessClient): string | null {
+  const room = c.room;
+  if (!room) return null;
+  try {
+    const code = (room as unknown as { state?: { roomCode?: unknown } }).state?.roomCode;
+    return typeof code === "string" && code.length > 0 ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Joins by the *published* short code, resolving it through matchmaking
+ * listings (metadata.roomCode) exactly like the player-facing UI path.
+ * Throws a clear error when no live listing carries the given code.
+ */
+export async function joinByPublishedCode(c: HarnessClient, code: string): Promise<void> {
+  const normalized = code.trim().toUpperCase();
+  const listings = await c.client.getAvailableRooms("hotel");
+  const match = listings.find(
+    (l) => (l.metadata as { roomCode?: string } | undefined)?.roomCode === normalized,
+  );
+  if (!match) {
+    throw new Error(`joinByPublishedCode: no live room publishes code "${normalized}"`);
+  }
+  const room = await c.client.joinById<unknown>(match.roomId, { name: c.name });
+  (c as unknown as { room: Room<unknown> | null }).room = room;
+  await new Promise<void>((r) => setTimeout(r, 120));
+}
+
 /** Polls until the player's replicated state shows fired === true. */
 export async function waitForPlayerFired(
   c: HarnessClient,
