@@ -328,9 +328,6 @@ const handlers = {
     client.cancelChannel();
     clearChannelActive();
   },
-  onAdvancePhase: (): void => {
-    client.advancePhase();
-  },
   onSetCodeInput: (code: string): void => {
     dispatch({ type: "setCodeInput", code });
   },

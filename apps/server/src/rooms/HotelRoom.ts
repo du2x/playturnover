@@ -26,7 +26,6 @@ import {
   TraitorReveal,
 } from "@grandhotel/shared";
 import {
-  AdvancePhaseMsgSchema,
   CallElevatorMsgSchema,
   ChannelCancelMsgSchema,
   ChannelStartMsgSchema,
@@ -160,10 +159,6 @@ export class HotelRoom extends Room<RoomState> {
       this.handleMove(client, data);
     });
 
-    this.onMessage("advancePhase", (client: Client, data: unknown) => {
-      this.handleAdvancePhase(client, data);
-    });
-
     this.onMessage("startRound", (client: Client, data: unknown) => {
       this.handleStartRound(client, data);
     });
@@ -278,20 +273,6 @@ export class HotelRoom extends Room<RoomState> {
     if (!isInsideRoom(player.x, player.floor, channel.roomId)) {
       this.cancelChannel(sessionId);
     }
-  }
-
-  private handleAdvancePhase(client: Client, raw: unknown): void {
-    if (client.sessionId !== this.state.hostSessionId) return;
-    const parsed = AdvancePhaseMsgSchema.safeParse(raw ?? {});
-    if (!parsed.success) return;
-
-    if (this.state.phase === "waiting") {
-      this.state.phase = "playing";
-    } else if (this.state.phase === "playing") {
-      this.state.phase = "results";
-      this.state.resultsPayload = null;
-    }
-    // results → no further transitions
   }
 
   private handleStartRound(client: Client, raw: unknown): void {
@@ -499,6 +480,7 @@ export class HotelRoom extends Room<RoomState> {
   private handleRideElevator(client: Client, raw: unknown): void {
     const parsed = RideElevatorMsgSchema.safeParse(raw ?? {});
     if (!parsed.success) return;
+    if (this.state.phase !== "playing") return;
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
     const elevator = this.getElevator(parsed.data.shaft);
@@ -596,6 +578,7 @@ export class HotelRoom extends Room<RoomState> {
   private handleChannelStart(client: Client, raw: unknown): void {
     const parsed = ChannelStartMsgSchema.safeParse(raw ?? {});
     if (!parsed.success) return;
+    if (this.state.phase !== "playing") return;
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
     const room = this.state.rooms.get(parsed.data.roomId);
@@ -644,6 +627,7 @@ export class HotelRoom extends Room<RoomState> {
   private handleChannelCancel(client: Client, raw: unknown): void {
     const parsed = ChannelCancelMsgSchema.safeParse(raw ?? {});
     if (!parsed.success) return;
+    if (this.state.phase !== "playing") return;
     this.cancelChannel(client.sessionId);
   }
 

@@ -13,10 +13,6 @@ export const MoveMsgSchema = z
   .strict();
 export type MoveMsg = z.infer<typeof MoveMsgSchema>;
 
-/** Host advances lifecycle phase (M0 legacy). */
-export const AdvancePhaseMsgSchema = z.object({}).strict();
-export type AdvancePhaseMsg = z.infer<typeof AdvancePhaseMsgSchema>;
-
 /** M1 — host starts round when ≥4 players. */
 export const StartRoundMsgSchema = z.object({}).strict();
 export type StartRoundMsg = z.infer<typeof StartRoundMsgSchema>;

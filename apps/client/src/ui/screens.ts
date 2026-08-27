@@ -14,8 +14,6 @@ export interface UIHandlers {
   onCancelChannel: () => void;
   onSetCodeInput: (code: string) => void;
   onDismissError?: () => void;
-  /** @deprecated M0 advancePhase handler; prefer onStartRound */
-  onAdvancePhase?: () => void;
 }
 
 function ensureContainers(overlay: HTMLElement): {
@@ -396,9 +394,6 @@ export function mountUI(
     },
     onCancelChannel: () => {
       client.cancelChannel();
-    },
-    onAdvancePhase: () => {
-      client.advancePhase();
     },
     onSetCodeInput: (code: string) => {
       dispatch({ type: "setCodeInput", code });

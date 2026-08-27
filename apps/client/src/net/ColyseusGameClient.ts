@@ -324,11 +324,6 @@ export class ColyseusGameClient implements GameClient {
     this.ensureRoomSend("channelCancel", {});
   }
 
-  advancePhase(): void {
-    // M0 legacy alias: host can still advance phase, but M1 uses startRound()
-    this.ensureRoomSend("advancePhase", {});
-  }
-
   private ensureRoomSend(type: string, payload: unknown): void {
     if (!this.room) {
       this.emitEvent({ type: "error", message: "not in room" });

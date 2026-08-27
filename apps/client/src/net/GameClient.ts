@@ -64,8 +64,6 @@ export interface GameClient {
   rideElevator(shaft: ElevatorShaft, destFloor: number): void;
   startChannel(type: ChannelType, roomId: string): void;
   cancelChannel(): void;
-  /** @deprecated M0 advancePhase alias; prefer startRound() */
-  advancePhase(): void;
   onState(cb: (s: RoomStateView) => void): Unsubscribe;
   onEvent(cb: (e: ClientEvent) => void): Unsubscribe;
   disconnect(): void;

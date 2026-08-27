@@ -1,14 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  COVERAGE_TARGET,
   HALLWAY_MAX_X,
   HALLWAY_MIN_X,
   MAX_PLAYERS,
+  ROOM_COUNT,
   SERVER_MAX_SPEED_PX_S,
 } from "@grandhotel/shared";
 import { HotelRoom, computeClampedX } from "../src/rooms/HotelRoom.js";
 
 function mockClient(sessionId: string): any {
-  return { sessionId } as unknown as import("colyseus").Client;
+  const c: any = { sessionId, _sent: [] as Array<{ type: string; data: unknown }> };
+  c.send = (type: string, data: unknown) => {
+    c._sent.push({ type, data });
+  };
+  c.getSent = () => c._sent;
+  return c as unknown as import("colyseus").Client & {
+    _sent: Array<{ type: string; data: unknown }>;
+    getSent: () => Array<{ type: string; data: unknown }>;
+  };
 }
 
 describe("HotelRoom — roster & cap (V-4)", () => {
@@ -100,63 +110,94 @@ describe("HotelRoom — roster & cap (V-4)", () => {
 });
 
 describe("HotelRoom — lifecycle phases (V-7)", () => {
-  it("initial phase waiting, host advance stepwise to playing then results with null payload", async () => {
-    const room = new HotelRoom();
-    await room.onCreate({});
-    const host = mockClient("host1");
-    const other = mockClient("other1");
-    await room.onJoin(host, { name: "Host" });
-    await room.onJoin(other, { name: "Other" });
-
-    expect(room.state.phase).toBe("waiting");
-    expect(room.state.resultsPayload).toBeNull();
-
-    // both clients would observe waiting initially — simulate by checking room state
-    const observedByHost: string[] = [room.state.phase];
-    const observedByOther: string[] = [room.state.phase];
-
-    // host advance → playing
-    (room as any).handleAdvancePhase(host, {});
-    expect(room.state.phase).toBe("playing");
-    observedByHost.push(room.state.phase);
-    observedByOther.push(room.state.phase);
-
-    // non-host advance refused
-    (room as any).handleAdvancePhase(other, {});
-    expect(room.state.phase).toBe("playing");
-    // no new entry added for refused attempt
-    expect(observedByHost).toEqual(["waiting", "playing"]);
-    expect(observedByOther).toEqual(["waiting", "playing"]);
-
-    // second host advance → results
-    (room as any).handleAdvancePhase(host, {});
-    expect(room.state.phase).toBe("results");
-    expect(room.state.resultsPayload).toBeNull();
-    // no winner/traitor keys
-    const serialized = JSON.stringify(room.state);
-    expect(serialized).not.toMatch(/winner/i);
-    expect(serialized).not.toMatch(/traitor/i);
-
-    observedByHost.push(room.state.phase);
-    observedByOther.push(room.state.phase);
-
-    expect(observedByHost).toEqual(["waiting", "playing", "results"]);
-    expect(observedByOther).toEqual(["waiting", "playing", "results"]);
-
-    // further advance refused
-    (room as any).handleAdvancePhase(host, {});
-    expect(room.state.phase).toBe("results");
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
   });
 
-  it("non-host cannot advance from waiting", async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  async function joinFour(room: HotelRoom): Promise<any[]> {
+    const clients = ["host", "p1", "p2", "p3"].map((sid) => mockClient(sid));
+    for (let i = 0; i < clients.length; i++) await room.onJoin(clients[i], { name: `P${i}` });
+    return clients;
+  }
+
+  it("host startRound with >=4 players: waiting -> playing with roles + shift deadline; resultsPayload stays null", async () => {
     const room = new HotelRoom();
     await room.onCreate({});
-    const host = mockClient("h");
-    const other = mockClient("o");
-    await room.onJoin(host, { name: "Host" });
-    await room.onJoin(other, { name: "Other" });
-    (room as any).handleAdvancePhase(other, {});
+    const clients = await joinFour(room);
+
     expect(room.state.phase).toBe("waiting");
+    expect(room.state.resultsPayload).toBeNull();
+
+    (room as any).handleStartRound(clients[0], {});
+
+    expect(room.state.phase).toBe("playing");
+    expect(room.state.shiftEndsAt).toBeGreaterThan(0);
+    expect(room.state.winner).toBeNull();
+    expect(room.state.traitorReveal).toBeNull();
+    expect(room.state.resultsPayload).toBeNull();
+
+    // every client got exactly one private role message with a valid role
+    for (const c of clients) {
+      const roleMsgs = c.getSent().filter((s: { type: string }) => s.type === "role");
+      expect(roleMsgs).toHaveLength(1);
+      const role = (room as any).getRoleFor(c.sessionId);
+      expect(role === "staff" || role === "saboteur").toBe(true);
+    }
+
+    // exactly one saboteur among the four
+    const saboteurCount = clients.filter(
+      (c) => (room as any).getRoleFor(c.sessionId) === "saboteur",
+    ).length;
+    expect(saboteurCount).toBe(1);
+    expect((room as any).getSaboteurSessionId()).not.toBeNull();
+  });
+
+  it("non-host startRound refused from waiting", async () => {
+    const room = new HotelRoom();
+    await room.onCreate({});
+    const clients = await joinFour(room);
+
+    (room as any).handleStartRound(clients[1], {});
+
+    expect(room.state.phase).toBe("waiting");
+    expect(room.state.shiftEndsAt).toBe(0);
+  });
+
+  it("buzzer: playing -> results carries winner + traitorReveal; resultsPayload stays null; further startRound refused", async () => {
+    const room = new HotelRoom();
+    await room.onCreate({});
+    const clients = await joinFour(room);
+
+    (room as any).handleStartRound(clients[0], {});
+
+    // staff reaches coverage target before the buzzer
+    let left = Math.ceil(ROOM_COUNT * COVERAGE_TARGET);
+    for (const rd of room.state.rooms.values()) {
+      if (left <= 0) break;
+      rd.state = "prepped";
+      left--;
+    }
+
+    vi.spyOn(Date, "now").mockReturnValue(room.state.shiftEndsAt);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(room.state.phase).toBe("results");
+    expect(room.state.winner).toBe("staff");
+    expect(room.state.traitorReveal?.sessionId).toBe((room as any).getSaboteurSessionId());
+    expect(room.state.resultsPayload).toBeNull();
+
+    for (const c of clients) {
+      expect(c.getSent().some((s: { type: string }) => s.type === "results")).toBe(true);
+    }
+
+    // further start refused once results
+    (room as any).handleStartRound(clients[0], {});
+    expect(room.state.phase).toBe("results");
   });
 });
 
