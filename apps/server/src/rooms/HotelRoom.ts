@@ -67,6 +67,7 @@ import {
 import type { Clock } from "../time.js";
 import { ColyseusClock } from "../time.js";
 import type { Cancel } from "../time.js";
+import { TelemetryLogger, type TelemetryRecord } from "../telemetry.js";
 
 // ── movement helpers ────────────────────────────────────────────────────────
 
@@ -356,7 +357,15 @@ export class HotelRoom extends Room<RoomState> {
         !saboteur.fired &&
         isInsideRoom(entering.x, entering.floor, channel.roomId)
       ) {
-        this.recordEvent("catch", enteringSessionId, sessionId, channel.roomId);
+        this.recordEvent(
+          "catch",
+          enteringSessionId,
+          sessionId,
+          channel.roomId,
+          true,
+          true,
+          this.saboteurHasCommittedCrime,
+        );
         this.firePlayer(sessionId);
         this.endRound("staff");
         return;
@@ -500,17 +509,19 @@ export class HotelRoom extends Room<RoomState> {
     }
   }
 
-  /** R-12 attrition: if non-disconnected staff count drops to 1, saboteur wins. */
+  /** R-12 attrition: if non-disconnected active staff count drops to 1, saboteur wins. */
   private checkAttritionWin(): void {
     if (this.state.phase !== "playing") return;
-    const totalConnected = this.state.players.size;
     const saboteurConnected = this.saboteurSessionId
       ? this.state.players.has(this.saboteurSessionId)
         ? 1
         : 0
       : 0;
-    const staffCount = totalConnected - saboteurConnected;
-    const winner = attritionWinner(totalConnected, saboteurConnected);
+    const activeStaffCount = [...this.state.players.values()].filter(
+      (p) => p.sessionId !== this.saboteurSessionId && !p.fired,
+    ).length;
+    const totalActive = activeStaffCount + saboteurConnected;
+    const winner = attritionWinner(totalActive, saboteurConnected);
     if (winner) this.endRound(winner);
   }
 
@@ -779,7 +790,7 @@ export class HotelRoom extends Room<RoomState> {
       "",
       correct,
       targetIsSaboteur,
-      !correct,
+      this.saboteurHasCommittedCrime,
     );
     if (correct) {
       this.firePlayer(parsed.data.targetSessionId);
