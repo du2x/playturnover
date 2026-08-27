@@ -20,8 +20,10 @@ truth for progress), `prd.md` (requirements + tuning values), `roadmap.md` (mile
 |---|---|---|
 | M0 | Walking skeleton (two browsers move together, lobby, one floor) | ✅ done |
 | M1 | Full round loop (3 floors, elevators, roles, prep/unprep, win checks) | ✅ done |
-| M2 | Evidence layer (door cards, freshness, coverage HUD, panels) | 🔄 specifying |
-| M3 | Justice + recap (walk-ins, accusations, spectator cam, event log) | ⏳ pending |
+| M2 | Evidence layer (door cards, freshness, coverage HUD, panels) | ✅ done |
+| M3 | Justice + recap (walk-ins, accusations, spectator cam, event log) | 🔄 building (S2) |
+
+> M3 is in BUILD S2 — `M3.2.1` walk-in & accusation justice ∥ `M3.2.2` spectator & event state (shared contracts `M3.1.1` done). Next: client accusation/spectator UX and integration gates. See `STATE.md` for the live pipeline log.
 
 ## The core loop
 
@@ -70,10 +72,11 @@ pnpm smoke:remote     # remote smoke — needs a deployed PUBLIC_URL
 
 pnpm verify:m0        # milestone final gates (install → typecheck/build → tests
 pnpm verify:m1        #   → integration → literal sweep → docker → smoke)
+pnpm verify:m2        #   M3 gate pending (scripts/verify-m3.sh) — run verify:m2 for full M2 regression
 ```
 
 Per-package: `pnpm --filter @grandhotel/<client|server|shared|tooling> <script>`.
-Tooling integration suites run behind `pnpm --filter @grandhotel/tooling test:integration`.
+Tooling integration suites run behind `pnpm --filter @grandhotel/tooling test:integration` (needs `--testTimeout=20000`, spawns real server on ephemeral port).
 
 ## Architecture (non-negotiable — see `techstack.md`)
 
@@ -96,6 +99,11 @@ Tooling integration suites run behind `pnpm --filter @grandhotel/tooling test:in
   `colyseus.js` clients — no browser needed.
 - `pnpm -r test` skips tooling's integration suites; run those via
   `pnpm --filter @grandhotel/tooling test:integration`.
+- `pnpm verify:m0` / `verify:m1` / `verify:m2` are the milestone gates (bash wrappers chain
+  install → typecheck/build → tests → integration → literal sweep → docker → smoke). `verify:m3`
+  lands with M3 close-out.
+- Deterministic pipeline gates: `pnpm validate:spec` / `validate:plan` / `validate:state` + `check:commit`
+  (`python3 scripts/validate-*.py`).
 - No CI — every gate runs locally via `scripts/` (`verify-m*.sh`, `validate-*.py`,
   `check-commit.py`).
 - The git `commit-msg` hook enforces **Conventional Commits**
@@ -115,3 +123,4 @@ verification can run.
 - `techstack.md` — architectural law
 - `STATE.md` — source of truth for pipeline progress
 - `AGENTS.md` / `AGENTIC-WORKFLOW.md` — technical ramp-up and the agentic pipeline
+- `.dev/specs/` / `.dev/plans/` / `.dev/reports/` — pipeline artifacts per milestone (spec → plan → verification)
