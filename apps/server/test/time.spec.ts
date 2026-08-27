@@ -121,7 +121,11 @@ describe("ColyseusClock", () => {
   it("delegates now to Date.now", () => {
     const { clock } = makeStub();
     const adapter = new ColyseusClock(clock);
-    expect(adapter.now()).toBe(Date.now());
+    const before = Date.now();
+    const now = adapter.now();
+    const after = Date.now();
+    expect(now).toBeGreaterThanOrEqual(before);
+    expect(now).toBeLessThanOrEqual(after);
   });
 
   it("delegates setTimeout with (fn, ms) argument order", () => {
