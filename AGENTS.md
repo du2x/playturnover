@@ -23,14 +23,15 @@ pnpm workspaces (`pnpm-workspace.yaml`: `apps/*`, `packages/*`, `tooling`).
 | `packages/shared` | `@grandhotel/shared` | **Single source of truth** for PRD §7 tuning constants, Colyseus schemas, Zod message schemas |
 | `apps/server` | `@grandhotel/server` | Node + Colyseus authoritative room logic (dev port 2567, `tsx watch`) |
 | `apps/client` | `@grandhotel/client` | Vite + Phaser 3 client (dev port 5173) |
-| `tooling` | `@grandhotel/tooling` | Integration harness, smoke script, per-milestone `verify:m0` gate |
+| `tooling` | `@grandhotel/tooling` | Integration harness + smoke script (two real `colyseus.js` clients, no browser); milestone gates live at root (`scripts/verify-m*.sh`) |
 
 Root scripts (the canonical entrypoints):
-- `pnpm install` — if pnpm missing: `corepack enable` (it's pinned via `packageManager`).
+- `pnpm install --frozen-lockfile` — the gate-standard install (devcontainer + verify scripts use frozen); `corepack enable` if pnpm missing (`packageManager` pins 9.15.9).
 - `pnpm typecheck` / `pnpm build` / `pnpm test` → recurse every workspace (`pnpm -r`).
-- `pnpm dev:server` / `pnpm dev:client` — run one side locally.
-- `pnpm smoke:local` / `pnpm smoke:remote` — two-client transport smoke check.
-- `pnpm verify:m0` — M0 final gate (chains install→typecheck→build→test→smoke→docker).
+- `pnpm dev:server` / `pnpm dev:client` — run one side locally (tsx watch / vite).
+- `pnpm smoke:local` / `pnpm smoke:remote` — two-client transport smoke; remote needs a deployed `PUBLIC_URL`.
+- `pnpm verify:m0` / `pnpm verify:m1` — milestone final gates (bash wrappers; chain install→typecheck→build→tests→integration→literal sweep→docker→smoke). Add `verify:mX` per milestone.
+- `pnpm validate:spec` / `validate:plan` / `validate:state` + `check:commit` — deterministic pipeline gates (python3 scripts/).
 - Per-package: `pnpm --filter @grandhotel/<client|server|shared|tooling> <script>`.
 
 ## Architecture constraints an agent would miss
@@ -61,6 +62,27 @@ connect two `colyseus.js` clients — **no browser required** for automated chec
 `pnpm verify:m0` (or the milestone's `verify:mx`) is the gate; a few V-criteria stay
 manual (visual/two-browser) and are marked SKIP-MANUAL.
 
+- **`pnpm -r test` skips tooling's integration suites.** `@grandhotel/tooling test`
+  only runs `src/harness/helpers.spec.ts`; the real suites live behind
+  `pnpm --filter @grandhotel/tooling test:integration` (spawns a server,
+  `--testTimeout=20000`) and the smoke script `tsx src/smoke.ts --url <host>`.
+- **Built server entry:** `apps/server/dist/index.js` — tsc emits `dist/src/*.js`
+  but the Dockerfile flattens it to `dist/*.js` for the single-origin image
+  (verify scripts probe both paths; manual booting needs the flattened one).
+
+## Gates & git discipline
+
+- **No CI.** `.github/` only mirrors the pipeline into Copilot chat modes; every
+  gate runs locally via `scripts/` (`verify-m0.sh`, `verify-m1.sh`, `validate-*.py`,
+  `check-commit.py`).
+- **The git `commit-msg` hook enforces Conventional Commits**
+  (`type(scope): description`, allowed types from `scripts/check-commit.py`).
+  Use `--no-verify` only with orchestrator approval.
+- **No `git reset --hard` / `git amend` without orchestrator go-ahead** — learned
+  the hard way in M1 (STATE.md Decisions, HOTFIX-RECOVER): a reset dropped a
+  parallel-session commit and wiped uncommitted work. Recover via reflog/dangling
+  blobs instead.
+
 ## Deploy (operator step, not a builder task)
 
 Single container, server + static client same origin, Fly.io via `fly.toml`.
@@ -85,6 +107,9 @@ How to use it:
   2. `context7_query-docs` with the resolved ID and a focused topic.
 - **Be specific about the installed version.** The monorepo pins exact versions in
   `package.json`; ask for docs matching those versions rather than “latest”.
+- **`@colyseus/schema` is a separate major (`^2.0.37`)** — do not pull the 0.5.x
+  docs that historically shipped bundled with `colyseus` 0.15; the M0 hotfix bumped
+  it (STATE.md Decisions). `colyseus.js` on the client is `^0.15.26`.
 - **Do not use Context7** for project-specific rules (PRD, architecture, state
   machine) — those are already in `prd.md`, `techstack.md`, and this file.
 
