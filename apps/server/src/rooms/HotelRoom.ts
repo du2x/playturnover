@@ -3,11 +3,15 @@ import type { Client } from "colyseus";
 import {
   COVERAGE_TARGET,
   ELEVATOR_ARRIVE_MS,
+  ELEVATOR_INTERACT_RADIUS,
   ELEVATOR_RIDE_MS,
   HALLWAY_MAX_X,
   HALLWAY_MIN_X,
   LOBBY_CENTER,
+  MAX_MOVE_DT_S,
+  MAX_NAME_LENGTH,
   MAX_PLAYERS,
+  MIN_PLAYERS,
   ROOM_CODE_LENGTH,
   ROOM_COUNT,
   SERVER_MAX_SPEED_PX_S,
@@ -49,10 +53,6 @@ import type { Channel } from "../channels.js";
 
 // ── movement helpers ────────────────────────────────────────────────────────
 
-export function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
 /**
  * Server-side clamp: newX = lastX + clamp(dx, ±SERVER_MAX_SPEED_PX_S*dt)
  * then hard-clamped to hallway bounds. Pure, exported for unit tests.
@@ -63,9 +63,9 @@ export function computeClampedX(
   dtSec: number,
 ): number {
   const maxDelta = SERVER_MAX_SPEED_PX_S * Math.max(0, dtSec);
-  const clampedDx = clamp(dx, -maxDelta, maxDelta);
+  const clampedDx = Math.max(-maxDelta, Math.min(maxDelta, dx));
   const newX = currentX + clampedDx;
-  return clamp(newX, HALLWAY_MIN_X, HALLWAY_MAX_X);
+  return Math.max(HALLWAY_MIN_X, Math.min(HALLWAY_MAX_X, newX));
 }
 
 // ── room ────────────────────────────────────────────────────────────────────
@@ -90,6 +90,14 @@ export class HotelRoom extends Room<RoomState> {
   private shiftTimer: unknown = null;
 
   onCreate(options: unknown): void {
+    // Rooms constructed directly in unit tests bypass the MatchMaker, which is
+    // what normally assigns `listing` before onCreate. Stub it so colyseus'
+    // dispose path (`listing.remove()` in Room._dispose) is a no-op instead of
+    // throwing "Cannot read properties of undefined (reading 'remove')".
+    if (!this.listing) {
+      this.listing = { remove: () => undefined };
+    }
+
     const opts = options as Record<string, unknown> | null | undefined;
     const override = opts?.["shiftLengthSOverride"];
     if (typeof override === "number" && Number.isFinite(override) && override > 0) {
@@ -184,7 +192,7 @@ export class HotelRoom extends Room<RoomState> {
     if (
       typeof rawName !== "string" ||
       rawName.trim().length === 0 ||
-      rawName.trim().length > 24
+      rawName.trim().length > MAX_NAME_LENGTH
     ) {
       throw new Error("bad-name");
     }
@@ -251,7 +259,7 @@ export class HotelRoom extends Room<RoomState> {
 
     const now = Date.now();
     const last = this.lastMoveAt.get(client.sessionId) ?? now;
-    const dt = Math.max(0, (now - last) / 1000);
+    const dt = Math.min(MAX_MOVE_DT_S, Math.max(0, (now - last) / 1000));
 
     // ignore dy entirely
     const newX = computeClampedX(player.x, parsed.data.dx, dt);
@@ -292,7 +300,7 @@ export class HotelRoom extends Room<RoomState> {
 
     if (this.state.phase !== "waiting") return;
 
-    if (this.state.players.size < 4) {
+    if (this.state.players.size < MIN_PLAYERS) {
       const anyClient = client as unknown as { send?: (t: string, d: unknown) => void };
       if (typeof anyClient.send === "function") {
         anyClient.send("error", { reason: "need-4-players" });

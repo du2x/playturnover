@@ -16,6 +16,10 @@ type Clock = {
 export const Room = colyseusPkg.Room as unknown as abstract new <T extends object>(...args: unknown[]) => {
   state: T;
   clock: Clock;
+  // Assigned by the MatchMaker before onCreate; undefined for rooms constructed
+  // directly in unit tests. Stubbed in HotelRoom.onCreate to make the dispose
+  // path (`listing.remove()`) a no-op in tests.
+  listing?: { remove: () => void };
   maxClients: number;
   hasReachedMaxClients(): boolean;
   setPatchRate(ms: number): void;

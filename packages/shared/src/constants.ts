@@ -8,6 +8,9 @@
 /** PRD §7 — Players 4–6, maximum players per room. */
 export const MAX_PLAYERS = 6;
 
+/** PRD §7 — Players 4–6, minimum players to start a round. */
+export const MIN_PLAYERS = 4;
+
 /** PRD §7 — Shift length 5:00 (300 seconds). */
 export const SHIFT_LENGTH_S = 300;
 
@@ -79,6 +82,12 @@ export const ROOM_CODE_LENGTH = 4;
 
 /** M0 free variable, see plan — unambiguous room code alphabet (no I/L/O/0/1). */
 export const ROOM_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+
+/** M0 free variable, see plan — display name cap in characters. */
+export const MAX_NAME_LENGTH = 24;
+
+/** M0 free variable, see plan — movement dt sanity cap in seconds. */
+export const MAX_MOVE_DT_S = 0.1;
 
 /** M0 free variable, see plan — seat-indexed avatar colors (6 distinct hex colors). */
 export const AVATAR_COLORS = [

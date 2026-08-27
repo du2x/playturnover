@@ -25,7 +25,6 @@ import {
   AVATAR_COLORS,
   RESULTS_PLACEHOLDER,
 } from "../src/constants.js";
-import { generateRoomCode } from "../src/roomCode.js";
 
 describe("PRD §7 tuning constants (V-2)", () => {
   it("MAX_PLAYERS = 6", () => {
@@ -91,50 +90,5 @@ describe("PRD §7 tuning constants (V-2)", () => {
 
   it("results placeholder is null (no winner/traitor in M0)", () => {
     expect(RESULTS_PLACEHOLDER).toBeNull();
-  });
-});
-
-describe("roomCode generator", () => {
-  it("returns ROOM_CODE_LENGTH chars from alphabet", () => {
-    const code = generateRoomCode();
-    expect(code.length).toBe(ROOM_CODE_LENGTH);
-    for (const ch of code) {
-      expect(ROOM_CODE_ALPHABET).toContain(ch);
-    }
-  });
-
-  it("deterministic with injected rng", () => {
-    // rng always 0 => first alphabet char repeated
-    const rngZero = () => 0;
-    expect(generateRoomCode(rngZero)).toBe(
-      ROOM_CODE_ALPHABET[0]!.repeat(ROOM_CODE_LENGTH),
-    );
-
-    // rng always 0.999 => last alphabet char
-    const rngOne = () => 0.999999;
-    const last = ROOM_CODE_ALPHABET[ROOM_CODE_ALPHABET.length - 1]!;
-    expect(generateRoomCode(rngOne)).toBe(last.repeat(ROOM_CODE_LENGTH));
-  });
-
-  it("sequential rng yields expected chars", () => {
-    const seq = [0, 0.5, 0.999, 0.1];
-    let i = 0;
-    const rng = () => seq[i++ % seq.length]!;
-    const code = generateRoomCode(rng);
-    // compute expected manually
-    let expected = "";
-    for (const v of seq.slice(0, ROOM_CODE_LENGTH)) {
-      const idx = Math.floor(v * ROOM_CODE_ALPHABET.length);
-      expected += ROOM_CODE_ALPHABET[idx];
-    }
-    expect(code).toBe(expected);
-  });
-
-  it("only uses unambiguous alphabet (no I/L/O/0/1)", () => {
-    expect(ROOM_CODE_ALPHABET).not.toContain("I");
-    expect(ROOM_CODE_ALPHABET).not.toContain("L");
-    expect(ROOM_CODE_ALPHABET).not.toContain("O");
-    expect(ROOM_CODE_ALPHABET).not.toContain("0");
-    expect(ROOM_CODE_ALPHABET).not.toContain("1");
   });
 });

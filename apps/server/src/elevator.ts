@@ -2,7 +2,6 @@ import {
   ELEVATOR_ARRIVE_MS,
   ELEVATOR_CAPACITY,
   ELEVATOR_INTERACT_RADIUS,
-  ELEVATOR_RIDE_MS,
   getElevatorX,
 } from "@grandhotel/shared";
 import type { ElevatorShaft } from "@grandhotel/shared";
@@ -160,5 +159,3 @@ export function removeRiderFromCar(car: ElevatorCarState, sessionId: string): vo
   if (queueIdx >= 0) car.queue.splice(queueIdx, 1);
   if (car.seats.length === 0) car.destFloor = null;
 }
-
-export { ELEVATOR_ARRIVE_MS, ELEVATOR_RIDE_MS, ELEVATOR_CAPACITY, ELEVATOR_INTERACT_RADIUS };
